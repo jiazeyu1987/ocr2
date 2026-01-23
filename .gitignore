@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.dll
+*.dylib
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Virtualenv / Conda
+.venv/
+venv/
+ENV/
+env/
+.conda/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs / runtime output
+*.log
+ocrlog/
+
+# PyInstaller / packaging
+build/
+dist/
+*.spec.bak
+*.toc
+*.pyi
+
+# Local artifacts
+screensshots/
+videos/
+compareImages/__pycache__/
+
+# Temporary / backups
+*.tmp
+*.bak
+~$*.docx
