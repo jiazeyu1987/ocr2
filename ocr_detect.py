@@ -21,6 +21,24 @@ class OCRDetect:
         if setting is None:
             setting = {'GPU': True, "time_skip": 0}
 
+        self._capture_roi = None  # (x1,y1,x2,y2) in screen coordinates
+        self._roi_offset = (0, 0)  # (x1,y1) if capture_roi enabled, else (0,0)
+        try:
+            roi_cfg = (setting or {}).get("roi1_capture") or (setting or {}).get("capture_roi") or {}
+            if isinstance(roi_cfg, dict) and bool(roi_cfg.get("enabled", False)):
+                x1 = int(roi_cfg.get("x1", 0))
+                y1 = int(roi_cfg.get("y1", 0))
+                x2 = int(roi_cfg.get("x2", 0))
+                y2 = int(roi_cfg.get("y2", 0))
+                if x2 > x1 and y2 > y1:
+                    self._capture_roi = (x1, y1, x2, y2)
+                    self._roi_offset = (x1, y1)
+                    self.logger.info(f"OCR capture ROI enabled: {self._capture_roi}")
+                else:
+                    self.logger.warning(f"OCR capture ROI invalid, ignoring: {roi_cfg}")
+        except Exception:
+            self.logger.exception("Failed to parse roi1_capture config; using full-screen capture")
+
         # When frozen (PyInstaller), __file__ points inside _internal; use exe directory as app root.
         cur_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
 
@@ -162,6 +180,8 @@ class OCRDetect:
         # A_img = img[152:180, 1581:1704]
         # A_img = img[194:217, 1581:1704]
 
+        # Coordinates below are defined in *full-screen* space (1920x1080 reference).
+        # If we capture only ROI1, we remap them into ROI-local coordinates via _roi_offset.
         A_row_start = 152
         A_row_end = 217
         A_col_start = 1555
@@ -178,6 +198,20 @@ class OCRDetect:
         alpha_col_start = 1874
         alpha_col_end = 1907
 
+
+        ox, oy = self._roi_offset
+        A_row_start = A_row_start - oy
+        A_row_end = A_row_end - oy
+        A_col_start = A_col_start - ox
+        # A_col_end currently unused; keep for clarity
+        _ = A_col_end - ox
+
+        h, w = img.shape[:2]
+        A_row_start = max(0, min(int(A_row_start), h))
+        A_row_end = max(0, min(int(A_row_end), h))
+        A_col_start = max(0, min(int(A_col_start), w))
+        if A_row_end <= A_row_start or w <= A_col_start:
+            return {}
 
         A_img = img[A_row_start:A_row_end, A_col_start:]
 
@@ -337,7 +371,11 @@ class OCRDetect:
 
         # 实际使用的时候，需要放开以下两行
         if img is None:
-            img = pyautogui.screenshot(allScreens=False, region=(0, 0, 1920, 1080))
+            if self._capture_roi is None:
+                img = pyautogui.screenshot(allScreens=False, region=(0, 0, 1920, 1080))
+            else:
+                x1, y1, x2, y2 = self._capture_roi
+                img = pyautogui.screenshot(allScreens=False, region=(x1, y1, x2 - x1, y2 - y1))
             img = np.array(img)
 
         if img is None or getattr(img, "shape", None) is None:
@@ -348,8 +386,8 @@ class OCRDetect:
             return
 
         h, w = img.shape[:2]
-        if h < 944 or w < 1304:
-            self.logger.warning(f"OCR screenshot too small: shape={img.shape}; expected at least (944,1304).")
+        if h < 100 or w < 100:
+            self.logger.warning(f"OCR screenshot too small: shape={img.shape}.")
             with self._health_lock:
                 self._consecutive_failures += 1
                 self._last_error = f"screenshot too small: shape={img.shape}"
@@ -378,7 +416,20 @@ class OCRDetect:
             self.logger.exception("detect_distance_in_img failed")
 
         try:
-            results = self.OCR_MDOEL.ocr(img[822:944, 1304:])
+            ox, oy = self._roi_offset
+            r1 = 822 - oy
+            r2 = 944 - oy
+            c1 = 1304 - ox
+
+            r1 = max(0, min(int(r1), h))
+            r2 = max(0, min(int(r2), h))
+            c1 = max(0, min(int(c1), w))
+            if r2 <= r1 or w <= c1:
+                raise ValueError(
+                    f"OCR ROI crop out of bounds: img_shape={img.shape}, roi_offset={(ox, oy)}, crop={(r1, r2, c1)}"
+                )
+
+            results = self.OCR_MDOEL.ocr(img[r1:r2, c1:])
         except Exception:
             self.logger.exception("PaddleOCR.ocr failed")
             with self._health_lock:

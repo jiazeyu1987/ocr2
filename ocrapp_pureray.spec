@@ -30,7 +30,15 @@ datas += [('whl', 'whl')]
 # Cython requires non-.py utility source files (e.g. `Cython/Utility/CppSupport.cpp`) to exist.
 tmp_ret = collect_all('Cython')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-datas += collect_data_files('Cython', includes=['Utility/**/*'])
+datas += collect_data_files('Cython', includes=[
+    'Utility/*',
+    'Utility/**/*',
+    'Utility/*.cpp',
+    'Utility/*.h',
+    'Utility/*.hpp',
+    'Utility/*.pxd',
+    'Utility/*.pyx',
+])
 
 tmp_ret = collect_all('setuptools')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]

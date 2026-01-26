@@ -1,0 +1,9 @@
+运行:
+2. (D:\miniconda3\shell\condabin\conda-hook.ps1) ; (conda activate base) 
+3.conda activate houyang  
+4.python setup.py build_ext --inplace
+5.python .\server.py
+发布: 
+4.python setup.py build_ext --inplace
+5.pyinstaller --noconfirm --clean ocrapp_pureray.spec
+6.将.py,.pyd文件复制到 \dist\ocrapp_pureray\_internal 目录下

@@ -101,18 +101,36 @@ class ImageProcessServer:
 
 
     def load_setting(self):
-        # When frozen (PyInstaller), __file__ points inside _internal; use exe directory as app root.
-        cur_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
-        setting_path = os.path.join(cur_dir, 'settings')
+        # Default to the production config path, but fall back to local app directory (useful for packaging/debug).
+        candidates = [r'D:\software_data\settings']
+        try:
+            app_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+            candidates.append(os.path.join(app_dir, 'settings'))
+        except Exception:
+            pass
 
-        if os.path.exists(setting_path):
-            with open(setting_path, 'r') as f:
+        for setting_path in candidates:
+            if not setting_path:
+                continue
+            if not os.path.exists(setting_path):
+                continue
+            try:
+                with open(setting_path, 'r', encoding='utf-8') as f:
+                    cfg = json.load(f)
+                self.logger.info(f"Loaded settings from: {setting_path}")
+                return cfg
+            except Exception as e:
                 try:
-                    return json.load(f)
-                except:
-                    return None
-        else:
-            return None
+                    self.logger.error(f"Failed to parse settings JSON: {setting_path}: {e}")
+                except Exception:
+                    pass
+                continue
+
+        try:
+            self.logger.warning(f"No settings file found. Tried: {candidates}")
+        except Exception:
+            pass
+        return None
 
     def start_ocr_server(self):
         # 啓動實時識別
@@ -404,5 +422,5 @@ def run(host="localhost", port=30415):
     imgProcess.start_server(host=host, port=port)
 
 if __name__ == "__main__":
-    run("192.168.4.107")
+    run("127.0.0.1")
 
