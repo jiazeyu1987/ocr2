@@ -378,16 +378,8 @@ def detect_differences(image1, aligned_image2, threshold=30, kernel_size=3, rect
     # cv2.rectangle(result, rect, (100, 120, 250), 1)# 显示了一个矩形框
     # cv2.ellipse(result, (int(rect[0] + rect[2]/2), int(rect[1]+rect[3]/2)), (rect[2]//2, rect[3]//2), 0, 0, 360, (0, 120, 0), 1)
 
-    cv2.putText(
-        img=result,
-        text="pct.={:.0f}%".format(100 * contour_area_sum/(0.25 * np.pi * rect[2] * rect[3])),
-        # text="pct.={:.0f}".format(contour_area_sum),
-        org=(50, 170),
-        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-        fontScale=1,
-        color=(0, 0, 255),
-        thickness=2
-    )
+    # Note: do NOT draw any text overlays on the output image (e.g. "pct=...").
+    # The server only needs the visual diff itself; annotations make saved images noisy for users.
 
     return {
         "original1": image1,

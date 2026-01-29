@@ -8,6 +8,12 @@ import time, os
 import sys
 import ctypes
 
+try:
+    from screenshot_lock import SCREENSHOT_LOCK
+except Exception:  # pragma: no cover
+    # Backward-compatible fallback: allow running even if `screenshot_lock.py` was not deployed.
+    # This will lose cross-thread screenshot serialization, but avoids hard crash.
+    SCREENSHOT_LOCK = threading.Lock()
 
 
 class OCRDetect:
@@ -371,11 +377,12 @@ class OCRDetect:
 
         # 实际使用的时候，需要放开以下两行
         if img is None:
-            if self._capture_roi is None:
-                img = pyautogui.screenshot(allScreens=False, region=(0, 0, 1920, 1080))
-            else:
-                x1, y1, x2, y2 = self._capture_roi
-                img = pyautogui.screenshot(allScreens=False, region=(x1, y1, x2 - x1, y2 - y1))
+            with SCREENSHOT_LOCK:
+                if self._capture_roi is None:
+                    img = pyautogui.screenshot(allScreens=False, region=(0, 0, 1920, 1080))
+                else:
+                    x1, y1, x2, y2 = self._capture_roi
+                    img = pyautogui.screenshot(allScreens=False, region=(x1, y1, x2 - x1, y2 - y1))
             img = np.array(img)
 
         if img is None or getattr(img, "shape", None) is None:

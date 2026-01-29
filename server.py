@@ -64,7 +64,10 @@ class ImageProcessServer:
         self.point_id = None
         self.client_thread = None
         self.compare_client = None
-        self.stop_event = threading.Event()
+        # OFFLINE compare is a two-signal session (start/stop). Use a per-session stop event.
+        # Do NOT reuse/clear a shared Event across sessions; otherwise an old thread may resume.
+        self.compare_stop_event = None
+        self._offline_lock = threading.Lock()
 
         self.compareTool = ComparePoints(self.setting, self.logger)
         # 为了首次调用服务器时不延迟，此处默认调用一次
@@ -269,43 +272,52 @@ class ImageProcessServer:
         #     self.compareTool = ComparePoints(self.logger)
         #     self.logger.info("成功导入对比截图工具")
 
-        if self.point_id != point_id:
+        # Serialize OFFLINE start/stop to avoid concurrent threads sharing ComparePoints instance.
+        with self._offline_lock:
+            if self.point_id != point_id:
+                self.point_id = point_id
 
-            self.point_id = point_id
+                # Ensure previous OFFLINE thread is stopped before starting a new one.
+                if self.compare_client is not None and self.compare_client.is_alive():
+                    try:
+                        if self.compare_stop_event is not None:
+                            self.compare_stop_event.set()
+                    except Exception:
+                        pass
+                    self.compare_client.join(timeout=5)
 
-            # 1检查线程状态，确保上次运行已停止
-            if self.compare_client is not None and self.compare_client.is_alive():
-                self.stop_event.set()
-                self.compare_client.join(timeout=2)
-                del self.compare_client
+                if self.compare_client is not None and self.compare_client.is_alive():
+                    # Never start a new session while the old one is still alive,
+                    # otherwise ComparePoints internal state will be corrupted.
+                    self.logger.error("OFFLINE start blocked: previous compare thread still alive after stop request")
+                    return {"success": False, "info": "offline_busy_previous_thread_alive"}
 
-            # self.stop_event = multiprocessing.Event()
+                # Start a new OFFLINE session with a fresh stop event (do NOT reuse/clear old events).
+                self.compare_stop_event = threading.Event()
+                self.compare_client = threading.Thread(
+                    target=self.compareTool.detect,
+                    args=(point_id, float(time_out), is_save, self.compare_stop_event),
+                    daemon=True,
+                )
+                self.compare_client.start()
+                return {"success": True, "info": "offline_started", "point_id": point_id}
 
-            # 2重置停止信号（关键：必须清除之前的set状态）
-            self.stop_event.clear()
-
-            # 3创建并启动新线程
-            # self.compare_client = multiprocessing.Process(
-            self.compare_client = threading.Thread(
-                target=self.compareTool.detect,
-                args=(point_id, float(time_out), is_save, self.stop_event),
-            )
-
-            self.compare_client.start()
-
-        else:
-            self.point_id = None
-            self.stop_event.set()
-            self.logger.info("stop set成功。")
-            self.compare_client.join(timeout=3)
+            else:
+                # Second OFFLINE signal: stop current session
+                self.point_id = None
+                try:
+                    if self.compare_stop_event is not None:
+                        self.compare_stop_event.set()
+                except Exception:
+                    pass
+                self.logger.info("stop set成功。")
+                if self.compare_client is not None:
+                    self.compare_client.join(timeout=5)
+                return {"success": True, "info": "offline_stop_requested", "point_id": point_id}
 
 
 
-        # self.compareTool.detect_compare_points(point_id, time_out, is_save)
-
-        results = self.compareTool.response
-
-        return results
+        return {"success": False, "info": "offline_unexpected_state"}
 
     def handle_client(self, client_socket, client_address):
         """处理客户端请求的函数"""
@@ -341,7 +353,6 @@ class ImageProcessServer:
                         try:
                             self.logger.info(req_type + arg)
                             response = self.get_offline(arg)
-                            response = None # 如果点击太快，造成online和offline同时返回，会造成包的组合发送，导致解析端出错，所以把offline的返回置空
                         except Exception as e:
                             self.logger.error("offline返回错误:如下")
                             self.logger.error(e)
@@ -365,7 +376,8 @@ class ImageProcessServer:
                 if response:
                     response = json.dumps(response)
                     # 发送响应给客户端
-                    client_socket.send(response.encode('utf-8'))
+                    # Add newline delimiter so clients can frame responses even if TCP coalesces packets.
+                    client_socket.sendall((response + "\n").encode('utf-8'))
 
 
         except Exception as e:

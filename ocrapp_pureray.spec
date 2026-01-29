@@ -1,4 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
+import glob
+import os
 from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 datas = []
@@ -44,6 +46,20 @@ tmp_ret = collect_all('setuptools')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 datas += collect_data_files('setuptools', includes=['_vendor/jaraco/text/*.txt'])
 
+# Bundle local compiled extensions used by the server (built via `python setup.py build_ext --inplace`).
+# PyInstaller may not discover them if excluded from Analysis.
+# Note: when PyInstaller executes a spec, `__file__` may not be injected (depends on invocation),
+# so fall back to current working directory.
+_here = os.path.dirname(__file__) if "__file__" in globals() else os.getcwd()
+for _pyd in glob.glob(os.path.join(_here, "treat_compare_img*.pyd")):
+    binaries.append((_pyd, "."))
+for _pyd in glob.glob(os.path.join(_here, "simplefem_focus*.pyd")):
+    binaries.append((_pyd, "."))
+if os.path.exists(os.path.join(_here, "simplefem_focus.py")):
+    datas.append((os.path.join(_here, "simplefem_focus.py"), "."))
+if os.path.exists(os.path.join(_here, "screenshot_lock.py")):
+    datas.append((os.path.join(_here, "screenshot_lock.py"), "."))
+hiddenimports += ["screenshot_lock"]
 
 a = Analysis(
     ['main.py'],
@@ -54,7 +70,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['treat_compare_img', 'server', 'ocr_detect'],
+    excludes=['treat_compare_img', 'simplefem_focus', 'server', 'ocr_detect'],
     noarchive=False,
     optimize=0,
 )
