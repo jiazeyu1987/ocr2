@@ -646,72 +646,136 @@ class ComparePoints:
 
         Uses PIL to render Chinese when available; falls back to ASCII text if font is missing.
         """
-        color = (self._sf_color or "").lower()
-        if not self._sf_enabled or color not in ("green", "red"):
+        if not self._sf_enabled:
             return bgr_img
+        # When metrics are missing (e.g. focus/ROI not found), still render the 4-line overlay
+        # to make debugging easier. Treat unknown as "red" for line1.
+        color = (self._sf_color or "").lower()
+        if color not in ("green", "red"):
+            color = "red"
 
-        # Default texts
-        text_cn = "绿色成功" if color == "green" else "红色失败"
-        text_en = "GREEN OK" if color == "green" else "RED FAIL"
+        # Ensure we have a 3-channel image for consistent drawing (PIL and OpenCV).
+        try:
+            if bgr_img is not None and getattr(bgr_img, "ndim", 0) == 2:
+                bgr_img = cv2.cvtColor(bgr_img, cv2.COLOR_GRAY2BGR)
+        except Exception:
+            # If conversion fails, keep original and rely on outer try/except fallbacks.
+            pass
 
-        # When green, include case (1/2/3) + parameters used for the decision.
-        if color == "green":
-            case = int(self._sf_green_case or 1)
-            roi2_before = self._sf_roi2_before_mean
-            roi2_after = self._sf_roi2_after_mean
-            roi2_diff = self._sf_roi2_diff
-            thr = float(self._sf_difference_threshold) if self._sf_difference_threshold is not None else None
+        # Build four per-condition lines (each line has its own color).
+        # 1) Final success/fail
+        # 2) ROI2 diff check
+        # 3) ROI3 G1/G2 override check
+        # 4) ROI3 column_diff override check
+        roi2_diff = self._sf_roi2_diff
+        thr = float(self._sf_difference_threshold) if self._sf_difference_threshold is not None else None
+        roi2_pass = False
+        if roi2_diff is not None and thr is not None:
+            try:
+                roi2_pass = float(roi2_diff) >= float(thr)
+            except Exception:
+                roi2_pass = False
 
-            line2_cn = None
-            line2_en = None
-            if roi2_before is not None and roi2_after is not None and roi2_diff is not None and thr is not None:
-                if case == 1:
-                    line2_cn = f"(1) ROI2: before={roi2_before:.2f} after={roi2_after:.2f} diff={roi2_diff:.2f} thr={thr:.2f}"
-                    line2_en = f"(1) ROI2: b={roi2_before:.2f} a={roi2_after:.2f} d={roi2_diff:.2f} thr={thr:.2f}"
-                elif case == 2:
-                    conf = dict(self._sf_roi3_g1_g2_override or {})
-                    g1_thr = float(conf.get("g1_threshold", 98.0))
-                    g2_thr = float(conf.get("g2_threshold", 20.0))
-                    g1 = self._sf_roi3_g1
-                    g2 = self._sf_roi3_g2
-                    if g1 is not None and g2 is not None:
-                        line2_cn = (
-                            f"(2) ROI2 diff={roi2_diff:.2f} thr={thr:.2f} | "
-                            f"ROI3 G1={float(g1):.2f}%>{g1_thr:.0f}% G2={float(g2):.2f}%>{g2_thr:.0f}%"
-                        )
-                        line2_en = (
-                            f"(2) ROI2 d={roi2_diff:.2f} thr={thr:.2f} | "
-                            f"ROI3 G1={float(g1):.2f}%>{g1_thr:.0f}% G2={float(g2):.2f}%>{g2_thr:.0f}%"
-                        )
-                elif case == 3:
-                    conf = dict(self._sf_roi3_column_diff_override or {})
-                    g1_thr = float(conf.get("g1_threshold", 99.0))
-                    col_thr = float(conf.get("threshold", 15.0))
-                    g1 = self._sf_roi3_g1
-                    col = self._sf_roi3_column_diff
-                    if g1 is not None and col is not None:
-                        line2_cn = (
-                            f"(3) ROI2 diff={roi2_diff:.2f} thr={thr:.2f} | "
-                            f"ROI3 G1={float(g1):.2f}%>{g1_thr:.0f}% colDiff={float(col):.2f}>{col_thr:.0f}"
-                        )
-                        line2_en = (
-                            f"(3) ROI2 d={roi2_diff:.2f} thr={thr:.2f} | "
-                            f"ROI3 G1={float(g1):.2f}%>{g1_thr:.0f}% colDiff={float(col):.2f}>{col_thr:.0f}"
-                        )
+        g1 = self._sf_roi3_g1
+        g2 = self._sf_roi3_g2
+        col = self._sf_roi3_column_diff
 
-            text_cn = text_cn + f" ({case})"
-            text_en = text_en + f" ({case})"
-            if line2_cn:
-                text_cn = text_cn + "\n" + line2_cn
-            if line2_en:
-                text_en = text_en + "\n" + line2_en
-        bgr_color = (0, 200, 0) if color == "green" else (0, 0, 255)
+        g1g2_conf = dict(self._sf_roi3_g1_g2_override or {})
+        g1g2_enabled = bool(g1g2_conf.get("enabled", True))
+        g1_thr = float(g1g2_conf.get("g1_threshold", 98.0))
+        g2_thr = float(g1g2_conf.get("g2_threshold", 20.0))
+        g1g2_pass = False
+        if g1g2_enabled and g1 is not None and g2 is not None:
+            try:
+                g1g2_pass = float(g1) > float(g1_thr) and float(g2) > float(g2_thr)
+            except Exception:
+                g1g2_pass = False
+
+        col_conf = dict(self._sf_roi3_column_diff_override or {})
+        col_enabled = bool(col_conf.get("enabled", True))
+        col_g1_thr = float(col_conf.get("g1_threshold", 99.0))
+        col_thr = float(col_conf.get("threshold", 15.0))
+        col_pass = False
+        if col_enabled and g1 is not None and col is not None:
+            try:
+                col_pass = float(g1) > float(col_g1_thr) and float(col) > float(col_thr)
+            except Exception:
+                col_pass = False
+
+        line1_cn = f"1. {'成功' if color == 'green' else '失败'}"
+        line1_en = f"1. {'OK' if color == 'green' else 'FAIL'}"
+
+        if roi2_diff is None or thr is None:
+            line2_cn = "2. ROI2: diff/threshold=N/A"
+            line2_en = "2. ROI2: diff/threshold=N/A"
+        else:
+            line2_cn = f"2. ROI2: (after-before)={float(roi2_diff):.3f} / {float(thr):.3f}"
+            line2_en = f"2. ROI2: d={float(roi2_diff):.3f} / thr={float(thr):.3f}"
+
+        if not g1g2_enabled:
+            line3_cn = f"3. ROI3(G1/G2): disabled"
+            line3_en = f"3. ROI3(G1/G2): disabled"
+        elif g1 is None or g2 is None:
+            line3_cn = "3. ROI3(G1/G2): N/A"
+            line3_en = "3. ROI3(G1/G2): N/A"
+        else:
+            line3_cn = f"3. ROI3: G1={float(g1):.2f}/{float(g1_thr):.2f}  G2={float(g2):.2f}/{float(g2_thr):.2f}"
+            line3_en = f"3. ROI3: G1={float(g1):.2f}/{float(g1_thr):.2f}  G2={float(g2):.2f}/{float(g2_thr):.2f}"
+
+        if not col_enabled:
+            line4_cn = "4. ROI3(colDiff): disabled"
+            line4_en = "4. ROI3(colDiff): disabled"
+        elif g1 is None or col is None:
+            line4_cn = "4. ROI3(colDiff): N/A"
+            line4_en = "4. ROI3(colDiff): N/A"
+        else:
+            line4_cn = f"4. ROI3: G1={float(g1):.2f}/{float(col_g1_thr):.2f}  colDiff={float(col):.2f}/{float(col_thr):.2f}"
+            line4_en = f"4. ROI3: G1={float(g1):.2f}/{float(col_g1_thr):.2f}  colDiff={float(col):.2f}/{float(col_thr):.2f}"
+
+        lines_cn = [line1_cn, line2_cn, line3_cn, line4_cn]
+        lines_en = [line1_en, line2_en, line3_en, line4_en]
+        line_ok = [color == "green", roi2_pass, g1g2_pass, col_pass]
+
+        def ok_bgr(ok: bool):
+            return (0, 200, 0) if ok else (0, 0, 255)
+        def ok_rgb(ok: bool):
+            return (0, 200, 0) if ok else (255, 0, 0)
+
+        # Font sizes for labels on the differ/diff image.
+        # Keep them small by default to avoid obscuring details; can be overridden via:
+        # setting["diff_label"] = {"pil_font_size": 18, "pil_spacing": 2, "cv_scale": 0.34, "cv_thickness": 1, "cv_line_step": 16}
+        label_cfg = {}
+        try:
+            if isinstance(getattr(self, "_raw_setting", None), dict):
+                label_cfg = self._raw_setting.get("diff_label") or {}
+        except Exception:
+            label_cfg = {}
+        try:
+            pil_font_size = int(label_cfg.get("pil_font_size", 18))
+        except Exception:
+            pil_font_size = 18
+        try:
+            pil_spacing = int(label_cfg.get("pil_spacing", 2))
+        except Exception:
+            pil_spacing = 2
+        try:
+            cv_scale = float(label_cfg.get("cv_scale", 0.34))
+        except Exception:
+            cv_scale = 0.34
+        try:
+            cv_thickness = int(label_cfg.get("cv_thickness", 1))
+        except Exception:
+            cv_thickness = 1
+        try:
+            cv_line_step = int(label_cfg.get("cv_line_step", 16))
+        except Exception:
+            cv_line_step = 16
 
         if Image is None or ImageDraw is None or ImageFont is None:
-            y = 60
-            for line in str(text_en).split("\n"):
-                cv2.putText(bgr_img, line, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, bgr_color, 2)
-                y += 34
+            y = 40
+            for i, line in enumerate(lines_en):
+                cv2.putText(bgr_img, str(line), (20, y), cv2.FONT_HERSHEY_SIMPLEX, cv_scale, ok_bgr(bool(line_ok[i])), cv_thickness)
+                y += cv_line_step
             return bgr_img
 
         # Try common Windows fonts that can render Chinese.
@@ -725,7 +789,7 @@ class ComparePoints:
         for fp in font_candidates:
             try:
                 if os.path.exists(fp):
-                    font = ImageFont.truetype(fp, 48)
+                    font = ImageFont.truetype(fp, pil_font_size)
                     break
             except Exception:
                 font = None
@@ -735,16 +799,26 @@ class ComparePoints:
             rgb = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb)
             draw = ImageDraw.Draw(pil_img)
-            txt = text_cn if font is not None else text_en
-            fill = (0, 200, 0) if color == "green" else (255, 0, 0)
-            draw.multiline_text((20, 20), txt, font=font, fill=fill, spacing=6)
+            use_cn = font is not None
+            lines = lines_cn if use_cn else lines_en
+            x = 20
+            y = 20
+            try:
+                bbox = font.getbbox("测试Ag") if font is not None else None
+                line_h = int((bbox[3] - bbox[1]) if bbox else (pil_font_size + 2))
+            except Exception:
+                line_h = int(pil_font_size + 2)
+            step = max(1, int(line_h + pil_spacing))
+            for i, line in enumerate(lines):
+                draw.text((x, y), str(line), font=font, fill=ok_rgb(bool(line_ok[i])))
+                y += step
             out = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
             return out
         except Exception:
-            y = 60
-            for line in str(text_en).split("\n"):
-                cv2.putText(bgr_img, line, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, bgr_color, 2)
-                y += 34
+            y = 40
+            for i, line in enumerate(lines_en):
+                cv2.putText(bgr_img, str(line), (20, y), cv2.FONT_HERSHEY_SIMPLEX, cv_scale, ok_bgr(bool(line_ok[i])), cv_thickness)
+                y += cv_line_step
             return bgr_img
 
     def write_img(self):
@@ -806,7 +880,10 @@ class ComparePoints:
             direct_diff = direct_diff.astype(np.uint8)
             # Draw FEM result label on the diff image (if enabled and available)
             try:
-                diff_bgr = cv2.cvtColor(direct_diff, cv2.COLOR_RGB2BGR) if direct_diff.ndim == 3 else direct_diff
+                if direct_diff.ndim == 3:
+                    diff_bgr = cv2.cvtColor(direct_diff, cv2.COLOR_RGB2BGR)
+                else:
+                    diff_bgr = cv2.cvtColor(direct_diff, cv2.COLOR_GRAY2BGR)
                 diff_bgr = self._draw_fem_result_on_diff(diff_bgr)
                 diff_path = after_path.replace("_after", "_diff")
                 cv2.imwrite(diff_path, diff_bgr)
@@ -852,7 +929,13 @@ class ComparePoints:
                         )
                     except Exception as e2:
                         self._tmp_dbg(f"save differ to tmp failed: {e2}")
-                diff_bgr = cv2.cvtColor(direct_diff, cv2.COLOR_RGB2BGR) if direct_diff.ndim == 3 else direct_diff
+                try:
+                    if direct_diff.ndim == 3:
+                        diff_bgr = cv2.cvtColor(direct_diff, cv2.COLOR_RGB2BGR)
+                    else:
+                        diff_bgr = cv2.cvtColor(direct_diff, cv2.COLOR_GRAY2BGR)
+                except Exception:
+                    diff_bgr = None
         else:
             if self.logger:
                 self.logger.info("no compare diff")
