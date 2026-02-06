@@ -488,37 +488,99 @@ class ImageProcessServer:
         self.logger.info(f"接收到来自 {client_address} 的连接")
 
         try:
-            while True:
+            # IMPORTANT: TCP is a byte stream. A recv() may contain multiple requests (coalesced),
+            # or one request may be split across recv() calls. If we directly json.loads() the payload,
+            # we can hit errors like: '{"..."}OFFLINE{"..."}' -> "Extra data".
+            #
+            # Recommended client framing: append '\n' after each request.
+            # This server also supports concatenated OFFLINE requests without '\n' (best-effort) by
+            # detecting JSON object boundaries.
+            buffer = ""
+
+            def scan_json_end(s, start_idx):
+                i = start_idx
+                n = len(s)
+                while i < n and s[i].isspace():
+                    i += 1
+                if i >= n:
+                    return -1
+                if s[i] not in "{[":
+                    return -1
+                stack = [s[i]]
+                i += 1
+                in_str = False
+                esc = False
+                while i < n:
+                    ch = s[i]
+                    if in_str:
+                        if esc:
+                            esc = False
+                        elif ch == "\\":
+                            esc = True
+                        elif ch == "\"":
+                            in_str = False
+                    else:
+                        if ch == "\"":
+                            in_str = True
+                        elif ch in "{[":
+                            stack.append(ch)
+                        elif ch in "}]":
+                            if not stack:
+                                return -1
+                            opener = stack.pop()
+                            if (opener == "{" and ch != "}") or (opener == "[" and ch != "]"):
+                                return -1
+                            if not stack:
+                                return i + 1
+                    i += 1
+                return -1
+
+            def try_parse_one(buf):
+                b = buf.lstrip("\r\n")
+                if not b:
+                    return None
+                i1 = b.find(";")
+                if i1 < 0:
+                    return None
+                i2 = b.find(";", i1 + 1)
+                if i2 < 0:
+                    return None
+                req_type = b[:i1].strip().upper()
+                param = b[i1 + 1 : i2].strip()
+                rest = b[i2 + 1 :]
+
+                arg = None
+                # Many clients send a JSON object as the 3rd field (especially for OFFLINE).
+                # Consume it (and pass it to handler) when present to prevent buffer leftovers.
+                j_end = scan_json_end(rest, 0)
+                if j_end >= 0:
+                    arg = rest[:j_end].strip()
+                    rest = rest[j_end:]
+                elif req_type == "OFFLINE":
+                    # OFFLINE requires a JSON payload; if incomplete, wait for more data.
+                    return None
+
+                rest = rest.lstrip("\r\n")
+                return req_type, param, arg, rest
+
+            def handle_one(req_type, param, arg):
                 response = None
-                # 接收客户端请求
-                request = client_socket.recv(1024).decode('utf-8').strip()
-
-                # 如果客户端关闭连接，请求将为空
-                if not request:
-                    break
-
-                # 解析请求格式: TYPE[:PARAM]
-                parts = request.split(';')
-
-                req_type = parts[0].upper()
-                param = parts[1] if len(parts) > 1 else None # 密码
-                arg = parts[2] if len(parts) > 2 else None
-
                 code = '31415'
-                # print(param)
-                # 根据请求类型处理
                 if param != code:
                     self.logger.info("密码错误")
                     response = '密码错误'
                 else:
-                    # print("request :", req_type)
                     if req_type == 'OFFLINE':
                         try:
-                            self.logger.info(req_type + arg)
+                            self.logger.info(req_type + (arg or ""))
                             response = self.get_offline(arg)
                         except Exception as e:
                             self.logger.error("offline返回错误:如下")
                             self.logger.error(e)
+                            try:
+                                self._pdbg(f"OFFLINE failed: raw_arg={arg!r}, buffer_tail={buffer[-120:]!r}")
+                            except Exception:
+                                pass
                             response = None
                     elif req_type == 'ONLINE':
                         try:
@@ -528,19 +590,42 @@ class ImageProcessServer:
                             self.logger.error("online返回错误:如下")
                             self.logger.error(e)
                             response = None
-
                     elif req_type == 'CLOSE':
                         self.close_ocr_server()
-                        response = {'success':True,  'info': "close successfully"}
+                        response = {'success': True,  'info': "close successfully"}
                     else:
-                        # 未知请求类型
-                        response = {'success':False, 'info': f"错误: 未知请求类型 '{req_type}'。支持的类型: {', '.join(self.REQUEST_TYPES.keys())}"}
+                        response = {'success': False, 'info': f"错误: 未知请求类型 '{req_type}'。支持的类型: {', '.join(self.REQUEST_TYPES.keys())}"}
 
                 if response:
                     response = json.dumps(response)
-                    # 发送响应给客户端
-                    # Add newline delimiter so clients can frame responses even if TCP coalesces packets.
                     client_socket.sendall((response + "\n").encode('utf-8'))
+
+            while True:
+                chunk = client_socket.recv(4096)
+                if not chunk:
+                    break
+                buffer += chunk.decode('utf-8', errors='replace')
+
+                # Preferred: newline-delimited requests
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split(";")
+                    rt = parts[0].strip().upper() if len(parts) > 0 else ""
+                    pm = parts[1].strip() if len(parts) > 1 else ""
+                    ar = parts[2].strip() if len(parts) > 2 else None
+                    handle_one(rt, pm, ar)
+
+                # Best-effort: concatenated OFFLINE requests without '\n'
+                while True:
+                    parsed = try_parse_one(buffer)
+                    if not parsed:
+                        break
+                    rt, pm, ar, rest = parsed
+                    buffer = rest
+                    handle_one(rt, pm, ar)
 
 
         except Exception as e:

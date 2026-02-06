@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
 
-def build_request(req_type: str, password: str, arg_json_text: str) -> bytes:
+def build_request_text(req_type: str, password: str, arg_json_text: str) -> str:
     req = req_type.strip().upper()
     if not req:
         raise ValueError("req_type is empty")
@@ -29,7 +29,13 @@ def build_request(req_type: str, password: str, arg_json_text: str) -> bytes:
     except Exception as e:
         raise ValueError(f"Invalid JSON args: {e}") from e
 
-    return f"{req};{pw};{json.dumps(arg_obj, ensure_ascii=False)}".encode("utf-8")
+    # Protocol framing:
+    # - Each request is one line, terminated by '\n' (TCP is a byte stream; without framing, messages can coalesce).
+    return f"{req};{pw};{json.dumps(arg_obj, ensure_ascii=False)}\n"
+
+
+def build_request(req_type: str, password: str, arg_json_text: str) -> bytes:
+    return build_request_text(req_type, password, arg_json_text).encode("utf-8")
 
 
 def recv_one(sock: socket.socket, bufsize: int = 65536, timeout_s: float = 2.0) -> str:
@@ -44,9 +50,15 @@ def recv_one(sock: socket.socket, bufsize: int = 65536, timeout_s: float = 2.0) 
             break
         chunks.append(data)
 
-        # The server typically sends a single JSON object per request.
-        joined = b"".join(chunks).strip()
-        if joined.startswith(b"{") and joined.endswith(b"}"):
+        # The server sends one JSON object per request, newline-delimited.
+        joined = b"".join(chunks)
+        if b"\n" in joined:
+            joined = joined.split(b"\n", 1)[0]
+            return joined.decode("utf-8", errors="replace").strip()
+
+        # Backward-compat fallback: some servers might not newline-delimit.
+        joined2 = joined.strip()
+        if joined2.startswith(b"{") and joined2.endswith(b"}"):
             break
 
     return b"".join(chunks).decode("utf-8", errors="replace").strip()
@@ -59,19 +71,22 @@ def send_once(
     password: str,
     arg_json_text: str,
     timeout_s: float,
-) -> Tuple[Optional[dict[str, Any]], str]:
+) -> Tuple[Optional[dict[str, Any]], str, str]:
+    request_text_full = build_request_text(req_type, password, arg_json_text)
+    request_text = request_text_full.rstrip("\r\n")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((host, port))
-        s.sendall(build_request(req_type, password, arg_json_text))
+        # Send exactly what build_request_text() produced (includes trailing '\n' framing).
+        s.sendall(request_text_full.encode("utf-8"))
         raw = recv_one(s, timeout_s=timeout_s)
 
     if not raw:
-        return None, raw
+        return None, raw, request_text_full
 
     try:
-        return json.loads(raw), raw
+        return json.loads(raw), raw, request_text_full
     except Exception:
-        return None, raw
+        return None, raw, request_text_full
 
 
 def run_cli() -> int:
@@ -92,12 +107,15 @@ def run_cli() -> int:
         return 2
 
     if not args.watch:
-        obj, raw = send_once(args.host, args.port, args.type, args.password, args.arg, args.timeout)
+        obj, raw, sent = send_once(args.host, args.port, args.type, args.password, args.arg, args.timeout)
+        # Show the full, framed request (including trailing '\n') for debugging.
+        print(f">> {sent!r}")
         print(json.dumps(obj, ensure_ascii=False, indent=2) if obj is not None else raw)
         return 0
 
     while True:
-        obj, raw = send_once(args.host, args.port, args.type, args.password, args.arg, args.timeout)
+        obj, raw, sent = send_once(args.host, args.port, args.type, args.password, args.arg, args.timeout)
+        print(f">> {sent!r}")
         print(json.dumps(obj, ensure_ascii=False) if obj is not None else raw)
         time.sleep(args.interval)
 
@@ -227,8 +245,9 @@ def run_gui() -> int:
             host, port, password, timeout_s = parse_conn()
             t = req_type_var.get().strip()
             a = args_text.get("1.0", tk.END)
-            log("INFO", f"Send: {t} to {host}:{port}")
-            obj, raw = send_once(host, port, t, password, a, timeout_s)
+            obj, raw, sent = send_once(host, port, t, password, a, timeout_s)
+            # Show the full, framed request (including trailing '\n') in an unambiguous way.
+            log("INFO", f"Send: {host}:{port}  {sent!r}")
 
             if raw == "":
                 # OFFLINE path in server.py intentionally sets response=None, so no response is expected.
