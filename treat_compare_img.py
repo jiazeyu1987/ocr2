@@ -1056,7 +1056,11 @@ class ComparePoints:
         if self._capture_roi is None:
             ultra_col_start = 1269
             ultra_col_end = 1920
+            # This message is intentionally duplicated for both debug channels:
+            # - [offline] is controlled by offline_debug_log
+            # - [peakdbg] is controlled by peak_debug_log
             self._dbg(f"screenshot region=({ultra_col_start},0,{ultra_col_end-ultra_col_start},1080) (legacy default)")
+            self._pdbg(f"screenshot region=({ultra_col_start},0,{ultra_col_end-ultra_col_start},1080) (legacy default)")
             with SCREENSHOT_LOCK:
                 img = pyautogui.screenshot(
                     allScreens=False,
@@ -1065,6 +1069,7 @@ class ComparePoints:
         else:
             x1, y1, x2, y2 = self._capture_roi
             self._dbg(f"screenshot region=({x1},{y1},{x2-x1},{y2-y1}) (roi1_capture)")
+            self._pdbg(f"screenshot region=({x1},{y1},{x2-x1},{y2-y1}) (roi1_capture)")
             with SCREENSHOT_LOCK:
                 img = pyautogui.screenshot(allScreens=False, region=(x1, y1, x2 - x1, y2 - y1))
         return img, img_time
