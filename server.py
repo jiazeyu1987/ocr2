@@ -50,6 +50,17 @@ class ImageProcessServer:
         }
 
         self.setting = self.load_setting()
+        # Verbose OFFLINE diagnostics switch (controlled by settings["peak_debug_log"]["enabled"]).
+        try:
+            pdl = (self.setting or {}).get("peak_debug_log")
+            if isinstance(pdl, dict):
+                self._peak_debug_enabled = bool(pdl.get("enabled", False))
+            else:
+                self._peak_debug_enabled = bool(pdl)
+        except Exception:
+            self._peak_debug_enabled = False
+        self._offline_req_seq = 0
+        self._offline_last_action = {}  # point_id -> {"action": "start"/"stop", "ts": float, "seq": int}
 
         self.ocrserver = OCRDetect(self.setting, self.logger)
 
@@ -69,7 +80,13 @@ class ImageProcessServer:
         self.compare_stop_event = None
         self._offline_lock = threading.Lock()
 
-        self.compareTool = ComparePoints(self.setting, self.logger)
+        # OFFLINE session state:
+        # - Each OFFLINE run gets its own ComparePoints instance to avoid state corruption when a previous
+        #   session is still doing slow IO (saving images / DB insert).
+        # - We keep references to "orphan" sessions so they can finish in background.
+        self._offline_session = None  # dict(point_id, thread, stop_event, tool)
+        self._offline_orphans = []
+        self.compareTool = None
         # 为了首次调用服务器时不延迟，此处默认调用一次
         # default_offline = {"point_id": 3141592653, "is_save": False, "time_out": 100}
         # self.get_offline(json.dumps(default_offline))
@@ -134,6 +151,13 @@ class ImageProcessServer:
         except Exception:
             pass
         return None
+
+    def _pdbg(self, msg: str):
+        try:
+            if getattr(self, "_peak_debug_enabled", False) and getattr(self, "logger", None):
+                self.logger.info(f"[peakdbg] {msg}")
+        except Exception:
+            pass
 
     def start_ocr_server(self):
         # 啓動實時識別
@@ -260,11 +284,19 @@ class ImageProcessServer:
             results = {'success':False, 'info': "输入参数有误！"}
             return results
 
-        arg = json.loads(arg)
+        # Parse once so we can log the structured payload.
+        arg_obj = json.loads(arg)
 
-        point_id = arg['point_id']
-        time_out = arg['time_out']
-        is_save = arg['is_save']
+        point_id = arg_obj['point_id']
+        time_out = arg_obj['time_out']
+        is_save = arg_obj['is_save']
+
+        try:
+            self._offline_req_seq = int(self._offline_req_seq) + 1
+        except Exception:
+            self._offline_req_seq = 1
+        seq = self._offline_req_seq
+        self._pdbg(f"OFFLINE recv: seq={seq}, point_id={point_id}, time_out={time_out}, is_save={is_save}, raw={arg_obj}")
 
         """计算非实时的结果"""
         # if self.compareTool is None:
@@ -272,48 +304,179 @@ class ImageProcessServer:
         #     self.compareTool = ComparePoints(self.logger)
         #     self.logger.info("成功导入对比截图工具")
 
-        # Serialize OFFLINE start/stop to avoid concurrent threads sharing ComparePoints instance.
+        # Serialize OFFLINE start/stop to avoid starting two capture loops at the same time.
         with self._offline_lock:
-            if self.point_id != point_id:
-                self.point_id = point_id
+            # Snapshot current active session (helps diagnose duplicated/partial OFFLINE sequences).
+            try:
+                active0 = self._offline_session
+                if active0 is None:
+                    self._pdbg(f"OFFLINE state(before): seq={seq}, active=None, orphans={len(self._offline_orphans or [])}")
+                else:
+                    t0 = active0.get("thread")
+                    tool0 = active0.get("tool")
+                    cap0 = getattr(tool0, "_capture_done_event", None) if tool0 is not None else None
+                    fin0 = getattr(tool0, "_finished_event", None) if tool0 is not None else None
+                    stage0 = getattr(tool0, "_stage", None) if tool0 is not None else None
+                    detail0 = getattr(tool0, "_stage_detail", None) if tool0 is not None else None
+                    start_ts0 = getattr(tool0, "_session_start_ts", None) if tool0 is not None else None
+                    stop_ts0 = getattr(tool0, "_stop_requested_ts", None) if tool0 is not None else None
+                    now0 = time.time()
+                    elapsed0 = (now0 - float(start_ts0)) if start_ts0 else None
+                    since_stop0 = (now0 - float(stop_ts0)) if stop_ts0 else None
+                    self._pdbg(
+                        f"OFFLINE state(before): seq={seq}, active_point_id={active0.get('point_id')}, "
+                        f"alive={t0.is_alive() if t0 is not None else None}, "
+                        f"capture_done={cap0.is_set() if cap0 is not None else None}, finished={fin0.is_set() if fin0 is not None else None}, "
+                        f"stage={stage0}, detail={detail0}, elapsed_s={elapsed0}, since_stop_s={since_stop0}, "
+                        f"orphans={len(self._offline_orphans or [])}"
+                    )
+            except Exception:
+                pass
 
-                # Ensure previous OFFLINE thread is stopped before starting a new one.
-                if self.compare_client is not None and self.compare_client.is_alive():
-                    try:
-                        if self.compare_stop_event is not None:
-                            self.compare_stop_event.set()
-                    except Exception:
-                        pass
-                    self.compare_client.join(timeout=5)
+            # Prune finished orphan sessions (best-effort).
+            try:
+                keep = []
+                for s in list(self._offline_orphans or []):
+                    t = (s or {}).get("thread")
+                    if t is not None and getattr(t, "is_alive", None) and t.is_alive():
+                        keep.append(s)
+                self._offline_orphans = keep[-8:]
+            except Exception:
+                pass
 
-                if self.compare_client is not None and self.compare_client.is_alive():
-                    # Never start a new session while the old one is still alive,
-                    # otherwise ComparePoints internal state will be corrupted.
-                    self.logger.error("OFFLINE start blocked: previous compare thread still alive after stop request")
-                    return {"success": False, "info": "offline_busy_previous_thread_alive"}
+            active = self._offline_session
 
-                # Start a new OFFLINE session with a fresh stop event (do NOT reuse/clear old events).
-                self.compare_stop_event = threading.Event()
-                self.compare_client = threading.Thread(
-                    target=self.compareTool.detect,
-                    args=(point_id, float(time_out), is_save, self.compare_stop_event),
-                    daemon=True,
-                )
-                self.compare_client.start()
-                return {"success": True, "info": "offline_started", "point_id": point_id}
-
-            else:
-                # Second OFFLINE signal: stop current session
+            # Second OFFLINE signal (same point_id): stop current session.
+            if active is not None and active.get("point_id") == point_id:
+                self._pdbg(f"OFFLINE action: seq={seq}, point_id={point_id}, action=stop (same as active)")
                 self.point_id = None
                 try:
-                    if self.compare_stop_event is not None:
-                        self.compare_stop_event.set()
+                    tool = active.get("tool")
+                    if tool is not None:
+                        try:
+                            tool._stop_requested_ts = time.time()
+                        except Exception:
+                            pass
+                    ev = active.get("stop_event")
+                    if ev is not None:
+                        ev.set()
                 except Exception:
                     pass
                 self.logger.info("stop set成功。")
-                if self.compare_client is not None:
-                    self.compare_client.join(timeout=5)
+                try:
+                    self._offline_orphans.append(active)
+                except Exception:
+                    pass
+                self._offline_session = None
+                try:
+                    self._offline_last_action[int(point_id)] = {"action": "stop", "ts": time.time(), "seq": seq}
+                except Exception:
+                    pass
                 return {"success": True, "info": "offline_stop_requested", "point_id": point_id}
+
+            # New point_id (or no active session): stop previous capture loop if needed.
+            if active is not None:
+                self._pdbg(
+                    f"OFFLINE action: seq={seq}, point_id={point_id}, action=switch_start (active_point_id={active.get('point_id')})"
+                )
+                try:
+                    tool = active.get("tool")
+                    if tool is not None:
+                        try:
+                            tool._stop_requested_ts = time.time()
+                        except Exception:
+                            pass
+                    ev = active.get("stop_event")
+                    if ev is not None:
+                        ev.set()
+                except Exception:
+                    pass
+
+                t = active.get("thread")
+                tool = active.get("tool")
+                capture_done = getattr(tool, "_capture_done_event", None) if tool is not None else None
+                finished = getattr(tool, "_finished_event", None) if tool is not None else None
+
+                # If the previous session is still in the screenshot loop, wait for it to exit.
+                try:
+                    if capture_done is not None:
+                        capture_done.wait(timeout=2)
+                except Exception:
+                    pass
+
+                try:
+                    if t is not None and t.is_alive() and (capture_done is None or (not capture_done.is_set())):
+                        t.join(timeout=5)
+                except Exception:
+                    pass
+
+                if t is not None and t.is_alive() and (capture_done is None or (not capture_done.is_set())):
+                    # Previous session did not exit in time (often due to slow IO like cv2.imwrite / sqlite insert).
+                    # Since we no longer share the ComparePoints instance across sessions, it is safe to proceed.
+                    try:
+                        now = time.time()
+                        start_ts = getattr(tool, "_session_start_ts", None) if tool is not None else None
+                        stop_ts = getattr(tool, "_stop_requested_ts", None) if tool is not None else None
+                        stage = getattr(tool, "_stage", None) if tool is not None else None
+                        stage_detail = getattr(tool, "_stage_detail", None) if tool is not None else None
+                        elapsed = (now - float(start_ts)) if start_ts else None
+                        stop_elapsed = (now - float(stop_ts)) if stop_ts else None
+                        capture_done_set = bool(capture_done.is_set()) if capture_done is not None else None
+                        finished_set = bool(finished.is_set()) if finished is not None else None
+                    except Exception:
+                        elapsed = None
+                        stop_elapsed = None
+                        stage = None
+                        stage_detail = None
+                        capture_done_set = None
+                        finished_set = None
+
+                    self.logger.warning(
+                        "OFFLINE switch: previous compare thread still alive; "
+                        f"prev_point_id={active.get('point_id')}, prev_alive={t.is_alive() if t is not None else None}, "
+                        f"capture_done={capture_done_set}, finished={finished_set}, stage={stage}, detail={stage_detail}, "
+                        f"elapsed_s={elapsed}, since_stop_s={stop_elapsed}, orphans={len(self._offline_orphans or [])}; "
+                        "starting new session anyway"
+                    )
+
+                # Previous session is either finished, or only doing slow post-processing IO.
+                # Allow a new OFFLINE session by creating a fresh ComparePoints instance.
+                try:
+                    self._offline_orphans.append(active)
+                except Exception:
+                    pass
+                self._offline_session = None
+
+            # Start a new OFFLINE session with a fresh stop event and a fresh ComparePoints instance.
+            # If user sends multiple OFFLINE with the same point_id but there's no active session,
+            # this will be treated as START (not STOP). Log history to make it explicit.
+            try:
+                last = self._offline_last_action.get(int(point_id))
+                if last is not None:
+                    self._pdbg(
+                        f"OFFLINE history: seq={seq}, point_id={point_id}, last_action={last.get('action')}, "
+                        f"last_seq={last.get('seq')}, last_age_s={(time.time() - float(last.get('ts'))) if last.get('ts') else None}"
+                    )
+            except Exception:
+                pass
+            self._pdbg(f"OFFLINE action: seq={seq}, point_id={point_id}, action=start")
+            self.point_id = point_id
+            stop_event = threading.Event()
+            tool = ComparePoints(self.setting, self.logger)
+            t = threading.Thread(
+                target=tool.detect,
+                args=(point_id, float(time_out), is_save, stop_event),
+                daemon=True,
+            )
+            self._offline_session = {"point_id": point_id, "thread": t, "stop_event": stop_event, "tool": tool}
+            self.compare_stop_event = stop_event
+            self.compare_client = t
+            t.start()
+            try:
+                self._offline_last_action[int(point_id)] = {"action": "start", "ts": time.time(), "seq": seq}
+            except Exception:
+                pass
+            return {"success": True, "info": "offline_started", "point_id": point_id}
 
 
 

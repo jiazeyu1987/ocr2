@@ -59,6 +59,17 @@ class ComparePoints:
         except Exception:
             self._debug_log_enabled = False
 
+        # Verbose diagnostics controlled by settings["peak_debug_log"]["enabled"].
+        self._peak_debug_enabled = False
+        try:
+            pdl = (self._raw_setting or {}).get("peak_debug_log")
+            if isinstance(pdl, dict):
+                self._peak_debug_enabled = bool(pdl.get("enabled", False))
+            else:
+                self._peak_debug_enabled = bool(pdl)
+        except Exception:
+            self._peak_debug_enabled = False
+
         self.setting = {
             "width_x": setting["width_x"] if "width_x" in setting else 2,
             "height_y": setting["height_y"] if "height_y" in setting else 4,
@@ -92,6 +103,16 @@ class ComparePoints:
         self.response = {"success": True}
 
         self._stop_event = None
+        # Lifecycle signals for server-side coordination.
+        # `_capture_done_event` becomes set as soon as the screenshot loop ends (so a new OFFLINE session can start),
+        # even if this thread is still doing slow IO (saving images / DB insert).
+        self._capture_done_event = threading.Event()
+        self._finished_event = threading.Event()
+        # Session timing / stage markers for diagnostics.
+        self._session_start_ts = None
+        self._stop_requested_ts = None
+        self._stage = "init"
+        self._stage_detail = None
 
         self.compare_before = None
         self.compare_after = None
@@ -179,6 +200,10 @@ class ComparePoints:
     def _dbg(self, msg):
         if self._debug_log_enabled and self.logger:
             self.logger.info(f"[offline] {msg}")
+
+    def _pdbg(self, msg):
+        if self._peak_debug_enabled and self.logger:
+            self.logger.info(f"[peakdbg] {msg}")
 
     def _sf_dbg(self, msg):
         if self._sf_debug_log_enabled and self.logger:
@@ -824,6 +849,11 @@ class ComparePoints:
     def write_img(self):
         if self.logger:
             self.logger.info("write_img...")
+        try:
+            self._stage = "write_img"
+            self._stage_detail = "start"
+        except Exception:
+            pass
 
         img_dir = "D:/software_data/imgs"
 
@@ -842,6 +872,10 @@ class ComparePoints:
             os.makedirs(img_dir)
 
         if self.compare_before is not None:
+            try:
+                self._stage_detail = "save_before"
+            except Exception:
+                pass
             before_bgr = cv2.cvtColor(self.compare_before, cv2.COLOR_RGB2BGR)
             cv2.imwrite(before_path, before_bgr)
         else:
@@ -850,6 +884,10 @@ class ComparePoints:
             before_bgr = None
 
         if self.compare_after is not None:
+            try:
+                self._stage_detail = "process_after"
+            except Exception:
+                pass
             try:
                 compare_after = image_difference.process_two_images(
                     cv2.cvtColor(self.compare_before, cv2.COLOR_RGB2BGR),
@@ -875,6 +913,10 @@ class ComparePoints:
             compare_after = None
 
         if self.compare_before is not None and self.compare_after is not None:
+            try:
+                self._stage_detail = "save_diff"
+            except Exception:
+                pass
             direct_diff = np.array(self.compare_after).astype(np.float32) - np.array(self.compare_before).astype(np.float32)
             direct_diff[np.where(direct_diff < 0)] = 0
             direct_diff = direct_diff.astype(np.uint8)
@@ -990,6 +1032,10 @@ class ComparePoints:
 
         if self.is_save:
             try:
+                try:
+                    self._stage_detail = "db_insert"
+                except Exception:
+                    pass
                 if self.logger:
                     self.logger.info("insert database---")
                 self.inser_info_database(self.db_dir, self.save_point_id, before_path, after_path)
@@ -1038,6 +1084,22 @@ class ComparePoints:
         # Keep a safe fallback for direct/manual calls.
         stop_event_provided = stop_event is not None
         self._stop_event = stop_event or threading.Event()
+        # Reset lifecycle events per session.
+        try:
+            self._capture_done_event = threading.Event()
+            self._finished_event = threading.Event()
+        except Exception:
+            pass
+        try:
+            self._session_start_ts = time.time()
+            self._stop_requested_ts = None
+            self._stage = "capture_loop"
+            self._stage_detail = None
+        except Exception:
+            pass
+        self._pdbg(
+            f"offline session start: point_id={point_id}, duration={duration}, is_save={is_save}, stop_event_provided={stop_event_provided}"
+        )
         # Hard timeout: even when stop_event is provided (two OFFLINE signals), stop after duration seconds.
         deadline_ts = None
         try:
@@ -1120,6 +1182,7 @@ class ComparePoints:
                 if deadline_ts is not None and time.time() >= deadline_ts:
                     timed_out = True
                     self._dbg(f"deadline reached (duration={duration}s), stopping loop: frame={frame_counter}")
+                    self._pdbg(f"deadline reached: point_id={point_id}, duration={duration}, frame={frame_counter}")
                     try:
                         self._stop_event.set()
                     except Exception:
@@ -1242,6 +1305,10 @@ class ComparePoints:
                 if peak_found and self.compare_after is None and after_target_frame is not None:
                     if frame_counter == after_target_frame:
                         self.compare_after = frame
+                        try:
+                            self._stage_detail = "after_by_peak"
+                        except Exception:
+                            pass
                         after_time = img_time
                         self.after_name = self.convert_timestamp2str(after_time)
                         if self.logger:
@@ -1255,7 +1322,26 @@ class ComparePoints:
             if self.logger:
                 self.logger.error(f"in detect_compare_points, some error occurred:\t{e}")
             self.response = {"success": False, "info": "error_in_detect", "detail": str(e)}
+            try:
+                if self._capture_done_event is not None:
+                    self._capture_done_event.set()
+                if self._finished_event is not None:
+                    self._finished_event.set()
+            except Exception:
+                pass
             return
+
+        # Screenshot loop ended (by stop_event or timeout). Signal server that capture is done.
+        try:
+            if self._capture_done_event is not None:
+                self._capture_done_event.set()
+        except Exception:
+            pass
+        try:
+            self._stage = "post_capture"
+            self._stage_detail = None
+        except Exception:
+            pass
 
         self._dbg(
             f"loop finished: frames={frame_counter}, peak_enabled={peak_enabled}, peak_found={peak_found}, "
@@ -1278,6 +1364,10 @@ class ComparePoints:
                 stop_img, stop_time = self.get_screen_shot()
                 self.compare_after = np.array(stop_img)
                 self.after_name = self.convert_timestamp2str(stop_time)
+                try:
+                    self._stage_detail = "after_by_stop_fallback"
+                except Exception:
+                    pass
                 if self.logger:
                     if timed_out:
                         self.logger.warning(self.after_name + ", after img fallback to timeout screenshot (post-loop)")
@@ -1304,6 +1394,10 @@ class ComparePoints:
             after_img, after_t = self.get_screen_shot()
             self.compare_after = np.array(after_img)
             self.after_name = self.convert_timestamp2str(after_t)[:-1]
+            try:
+                self._stage_detail = "after_by_final_fallback"
+            except Exception:
+                pass
             self._dbg(f"compare_after final fallback screenshot: ts={self.after_name}")
             roi1_gray = None
             try:
@@ -1372,6 +1466,11 @@ class ComparePoints:
             self._tmp_flush_on_stop(point_id)
 
         try:
+            try:
+                self._stage = "write_img"
+                self._stage_detail = "call"
+            except Exception:
+                pass
             self._dbg(f"write_img start: before_name={self.before_name}, after_name={self.after_name}, is_save={self.is_save}")
             self.write_img()
             self._dbg("write_img done")
@@ -1379,7 +1478,41 @@ class ComparePoints:
             if self.logger:
                 self.logger.error(e)
             self.response = {"success": False, "info": "error_in_write img", "detail": str(e)}
+            try:
+                if self._finished_event is not None:
+                    self._finished_event.set()
+            except Exception:
+                pass
             return
+
+        try:
+            stop_reason = "timeout" if timed_out else ("stop_signal" if (self._stop_event is not None and self._stop_event.is_set()) else "unknown")
+            after_method = None
+            try:
+                d = (self._stage_detail or "")
+                if "peak" in d:
+                    after_method = "peak"
+                elif "stop_fallback" in d:
+                    after_method = "stop_fallback"
+                elif "final_fallback" in d:
+                    after_method = "final_fallback"
+            except Exception:
+                after_method = None
+            self._pdbg(
+                f"offline session end: point_id={point_id}, stop_reason={stop_reason}, after_method={after_method}, "
+                f"before_ts={self.before_name}, after_ts={self.after_name}, peak_enabled={peak_enabled}, peak_found={peak_found}, "
+                f"frames={frame_counter}"
+            )
+        except Exception:
+            pass
+
+        try:
+            self._stage = "finished"
+            self._stage_detail = None
+            if self._finished_event is not None:
+                self._finished_event.set()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
