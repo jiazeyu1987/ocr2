@@ -113,6 +113,9 @@ class ComparePoints:
         self._stop_requested_ts = None
         self._stage = "init"
         self._stage_detail = None
+        # External single-flag output (overwritten each OFFLINE session).
+        # Contains only "1" (success) or "0" (failure).
+        self._result_flag_path = r"D:/software_data/result.txt"
 
         self.compare_before = None
         self.compare_after = None
@@ -212,6 +215,33 @@ class ComparePoints:
     def _tmp_dbg(self, msg):
         if self._tmp_frames_enabled and self.logger:
             self.logger.info(f"[tmp] {msg}")
+
+    def _write_result_flag(self, ok: bool):
+        """
+        Overwrite D:/software_data/result.txt with a single char:
+        - success -> "1"
+        - failure -> "0"
+        """
+        try:
+            out_path = str(getattr(self, "_result_flag_path", r"D:/software_data/result.txt"))
+            out_dir = os.path.dirname(out_path)
+            if out_dir and (not os.path.exists(out_dir)):
+                os.makedirs(out_dir, exist_ok=True)
+
+            tmp_path = out_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write("1" if ok else "0")
+            os.replace(tmp_path, out_path)
+
+            try:
+                self._pdbg(f"result flag written: path={out_path}, value={'1' if ok else '0'}")
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                self._pdbg(f"result flag write failed: path={getattr(self, '_result_flag_path', None)}, err={e}")
+            except Exception:
+                pass
 
     def _tmp_init_session(self, point_id: Optional[int], before_ts: str):
         if not self._tmp_frames_enabled:
@@ -920,6 +950,13 @@ class ComparePoints:
             direct_diff = np.array(self.compare_after).astype(np.float32) - np.array(self.compare_before).astype(np.float32)
             direct_diff[np.where(direct_diff < 0)] = 0
             direct_diff = direct_diff.astype(np.uint8)
+            # Differ success/failure: based on peak_detect(SimpleFEM) final color.
+            # If peak_detect is disabled or color is unknown, treat as failure.
+            is_success = False
+            try:
+                is_success = bool(self._sf_enabled and str(self._sf_color or "").lower() == "green")
+            except Exception:
+                is_success = False
             # Draw FEM result label on the diff image (if enabled and available)
             try:
                 if direct_diff.ndim == 3:
@@ -928,7 +965,13 @@ class ComparePoints:
                     diff_bgr = cv2.cvtColor(direct_diff, cv2.COLOR_GRAY2BGR)
                 diff_bgr = self._draw_fem_result_on_diff(diff_bgr)
                 diff_path = after_path.replace("_after", "_diff")
-                cv2.imwrite(diff_path, diff_bgr)
+                ok = False
+                try:
+                    ok = bool(cv2.imwrite(diff_path, diff_bgr))
+                except Exception:
+                    ok = False
+                if ok:
+                    self._write_result_flag(is_success)
 
                 # Also save diff/differ image into tmp session folder (if enabled) for easier offline inspection.
                 if self._tmp_frames_enabled and self._tmp_session_dir:
@@ -953,7 +996,13 @@ class ComparePoints:
                 if self.logger:
                     self.logger.error(f"write diff with label failed: {e}; fallback to raw diff")
                 diff_path = after_path.replace("_after", "_diff")
-                cv2.imwrite(diff_path, direct_diff)
+                ok = False
+                try:
+                    ok = bool(cv2.imwrite(diff_path, direct_diff))
+                except Exception:
+                    ok = False
+                if ok:
+                    self._write_result_flag(is_success)
                 if self._tmp_frames_enabled and self._tmp_session_dir:
                     try:
                         ts = self.after_name or self.before_name or datetime.now().strftime("%Y-%m-%d_%H-%M-%S.%f")[:-3]
