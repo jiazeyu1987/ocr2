@@ -95,6 +95,11 @@ class OCRDetect:
 
                     'skin_distance': None, 'A': None, 'B': None, 'Alpha': None, 'Zoom_scaler': 1.0, 'Is_Freeze': False, 'Is_HIFU': False}
         self.MEASSURE['Points_Per_MM'] = None
+        # 2-frame confirmation debounce for jitter-prone bools.
+        self._debounce_bool_state = {
+            "Is_Freeze": {"stable": False, "candidate": None, "count": 0},
+            "Is_HIFU": {"stable": False, "candidate": None, "count": 0},
+        }
 
 
     def get_gpu_count(self):
@@ -198,6 +203,36 @@ class OCRDetect:
                 if "HIFU" in t:
                     return True
         return False
+
+    def _debounce_bool(self, name: str, raw_value: bool) -> bool:
+        st = self._debounce_bool_state.get(name)
+        if st is None:
+            return bool(raw_value)
+
+        raw = bool(raw_value)
+        stable = bool(st["stable"])
+        candidate = st["candidate"]
+        count = int(st["count"])
+
+        if raw == stable:
+            st["candidate"] = None
+            st["count"] = 0
+            return stable
+
+        if candidate is None or bool(candidate) != raw:
+            st["candidate"] = raw
+            st["count"] = 1
+            return stable
+
+        count += 1
+        st["count"] = count
+        if count >= 2:
+            st["stable"] = raw
+            st["candidate"] = None
+            st["count"] = 0
+            return raw
+
+        return stable
 
     def detect_distance_in_img(self, img):
         ##
@@ -476,8 +511,8 @@ class OCRDetect:
         is_hifu = self.find_is_hifu_in_ocr_results(results)
         settings = self.find_other_setting_in_ocr_results(results)
 
-        updates['Is_Freeze'] = is_freeze
-        updates['Is_HIFU'] = is_hifu
+        updates['Is_Freeze'] = self._debounce_bool("Is_Freeze", is_freeze)
+        updates['Is_HIFU'] = self._debounce_bool("Is_HIFU", is_hifu)
         if zoom_scaler is not None:
             updates['Zoom_scaler'] = zoom_scaler
 
