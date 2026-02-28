@@ -93,7 +93,7 @@ class OCRDetect:
         # 测量，缩放，是否冻结等尺度相关
         self.MEASSURE = {'增益': None, '深度': None, '频率': None, '图像增强': None,
 
-                    'skin_distance': None, 'A': None, 'B': None, 'Alpha': None, 'Zoom_scaler': 1.0, 'Is_Freeze': False}
+                    'skin_distance': None, 'A': None, 'B': None, 'Alpha': None, 'Zoom_scaler': 1.0, 'Is_Freeze': False, 'Is_HIFU': False}
         self.MEASSURE['Points_Per_MM'] = None
 
 
@@ -180,6 +180,24 @@ class OCRDetect:
                     return False
 
         return True
+
+    def find_is_hifu_in_ocr_results(self, results):
+        for batch in (results or []):
+            if not batch:
+                continue
+            for item in batch:
+                try:
+                    text = str(item[1][0] or "")
+                except Exception:
+                    continue
+                # Keep alnum only and normalize common OCR confusions.
+                t = "".join(ch for ch in text.upper() if ch.isalnum())
+                if not t:
+                    continue
+                t = t.replace("1", "I").replace("L", "I").replace("0", "O")
+                if "HIFU" in t:
+                    return True
+        return False
 
     def detect_distance_in_img(self, img):
         ##
@@ -427,16 +445,18 @@ class OCRDetect:
             r1 = 822 - oy
             r2 = 944 - oy
             c1 = 1304 - ox
+            c2 = c1 + 384  # fixed width for main OCR region
 
             r1 = max(0, min(int(r1), h))
             r2 = max(0, min(int(r2), h))
             c1 = max(0, min(int(c1), w))
-            if r2 <= r1 or w <= c1:
+            c2 = max(0, min(int(c2), w))
+            if r2 <= r1 or c2 <= c1:
                 raise ValueError(
-                    f"OCR ROI crop out of bounds: img_shape={img.shape}, roi_offset={(ox, oy)}, crop={(r1, r2, c1)}"
+                    f"OCR ROI crop out of bounds: img_shape={img.shape}, roi_offset={(ox, oy)}, crop={(r1, r2, c1, c2)}"
                 )
 
-            results = self.OCR_MDOEL.ocr(img[r1:r2, c1:])
+            results = self.OCR_MDOEL.ocr(img[r1:r2, c1:c2])
         except Exception:
             self.logger.exception("PaddleOCR.ocr failed")
             with self._health_lock:
@@ -453,20 +473,23 @@ class OCRDetect:
 
         zoom_scaler = self.find_Zoom_Scaler_in_ocr_results(results)
         is_freeze = self.find_is_freeze_in_ocr_results(results)
+        is_hifu = self.find_is_hifu_in_ocr_results(results)
         settings = self.find_other_setting_in_ocr_results(results)
 
         updates['Is_Freeze'] = is_freeze
+        updates['Is_HIFU'] = is_hifu
         if zoom_scaler is not None:
             updates['Zoom_scaler'] = zoom_scaler
 
 
 
         # MEASSURE.update(settings)# 不能直接update，因为用户可能切换，使得不是所有的setting都能识别，如深度，但是深度已经设定好了
+        allowed_setting_keys = {"深度", "娣卞害"}
         for key in settings.keys():
-            if settings[key] is not None:  # 设定的参数，由于有移动，没有识别到，默认为前一次的结果
+            if key not in allowed_setting_keys:
+                continue
+            if settings[key] is not None:  # only keep depth update
                 updates[key] = settings[key]
-            else:
-                pass
 
 
         with self._measure_lock:

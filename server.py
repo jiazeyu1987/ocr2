@@ -259,6 +259,7 @@ class ImageProcessServer:
 
             'Depth': m.get('深度'),
             'IsFreeze': m.get('Is_Freeze'),
+            'isHIFU': m.get('Is_HIFU', False),
             'Points_Per_MM': m.get('Points_Per_MM'),
         }
 
