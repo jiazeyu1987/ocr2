@@ -61,6 +61,7 @@ class ImageProcessServer:
             self._peak_debug_enabled = False
         self._offline_req_seq = 0
         self._offline_last_action = {}  # point_id -> {"action": "start"/"stop", "ts": float, "seq": int}
+        self._offline_point_req_count = {}  # point_id -> accepted OFFLINE request count (max 2)
 
         self.ocrserver = OCRDetect(self.setting, self.logger)
 
@@ -280,6 +281,7 @@ class ImageProcessServer:
     def get_offline(self, arg):
 
         results = ""
+        self.logger.info("new offline method")
 
         if arg is None:
             results = {'success':False, 'info': "输入参数有误！"}
@@ -307,6 +309,19 @@ class ImageProcessServer:
 
         # Serialize OFFLINE start/stop to avoid starting two capture loops at the same time.
         with self._offline_lock:
+            try:
+                point_key = int(point_id)
+            except Exception:
+                point_key = point_id
+
+            accepted_count = int(self._offline_point_req_count.get(point_key, 0))
+            if accepted_count >= 2:
+                self._pdbg(
+                    f"OFFLINE drop: seq={seq}, point_id={point_id}, reason=too_many_requests, accepted_count={accepted_count}"
+                )
+                self.logger.info(f"OFFLINE ignored: point_id={point_id}, accepted_count={accepted_count}, seq={seq}")
+                return {"success": False, "info": "offline_ignored_extra_request", "point_id": point_id}
+
             # Snapshot current active session (helps diagnose duplicated/partial OFFLINE sequences).
             try:
                 active0 = self._offline_session
@@ -350,6 +365,10 @@ class ImageProcessServer:
             # Second OFFLINE signal (same point_id): stop current session.
             if active is not None and active.get("point_id") == point_id:
                 self._pdbg(f"OFFLINE action: seq={seq}, point_id={point_id}, action=stop (same as active)")
+                self._offline_point_req_count[point_key] = accepted_count + 1
+                self.logger.info(
+                    f"OFFLINE accepted: point_id={point_id}, accepted_count={self._offline_point_req_count[point_key]}, action=stop, seq={seq}"
+                )
                 self.point_id = None
                 try:
                     tool = active.get("tool")
@@ -470,6 +489,10 @@ class ImageProcessServer:
                 daemon=True,
             )
             self._offline_session = {"point_id": point_id, "thread": t, "stop_event": stop_event, "tool": tool}
+            self._offline_point_req_count[point_key] = accepted_count + 1
+            self.logger.info(
+                f"OFFLINE accepted: point_id={point_id}, accepted_count={self._offline_point_req_count[point_key]}, action=start, seq={seq}"
+            )
             self.compare_stop_event = stop_event
             self.compare_client = t
             t.start()
