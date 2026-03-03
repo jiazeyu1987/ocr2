@@ -3009,7 +3009,7 @@ typedef struct {
   PyObject *__pyx_tuple[15];
   PyObject *__pyx_codeobj_tab[20];
   PyObject *__pyx_string_tab[359];
-  PyObject *__pyx_number_tab[21];
+  PyObject *__pyx_number_tab[22];
 /* #### Code section: module_state_contents ### */
 /* CommonTypesMetaclass.module_state_decls */
 PyTypeObject *__pyx_CommonTypesMetaclassType;
@@ -3432,22 +3432,23 @@ static __pyx_mstatetype * const __pyx_mstate_global = &__pyx_mstate_global_stati
 #define __pyx_int_0 __pyx_number_tab[2]
 #define __pyx_int_1 __pyx_number_tab[3]
 #define __pyx_int_2 __pyx_number_tab[4]
-#define __pyx_int_8 __pyx_number_tab[5]
-#define __pyx_int_10 __pyx_number_tab[6]
-#define __pyx_int_15 __pyx_number_tab[7]
-#define __pyx_int_20 __pyx_number_tab[8]
-#define __pyx_int_100 __pyx_number_tab[9]
-#define __pyx_int_152 __pyx_number_tab[10]
-#define __pyx_int_217 __pyx_number_tab[11]
-#define __pyx_int_384 __pyx_number_tab[12]
-#define __pyx_int_734 __pyx_number_tab[13]
-#define __pyx_int_822 __pyx_number_tab[14]
-#define __pyx_int_944 __pyx_number_tab[15]
-#define __pyx_int_1080 __pyx_number_tab[16]
-#define __pyx_int_1304 __pyx_number_tab[17]
-#define __pyx_int_1555 __pyx_number_tab[18]
-#define __pyx_int_1704 __pyx_number_tab[19]
-#define __pyx_int_1920 __pyx_number_tab[20]
+#define __pyx_int_5 __pyx_number_tab[5]
+#define __pyx_int_8 __pyx_number_tab[6]
+#define __pyx_int_10 __pyx_number_tab[7]
+#define __pyx_int_15 __pyx_number_tab[8]
+#define __pyx_int_20 __pyx_number_tab[9]
+#define __pyx_int_100 __pyx_number_tab[10]
+#define __pyx_int_152 __pyx_number_tab[11]
+#define __pyx_int_217 __pyx_number_tab[12]
+#define __pyx_int_384 __pyx_number_tab[13]
+#define __pyx_int_734 __pyx_number_tab[14]
+#define __pyx_int_822 __pyx_number_tab[15]
+#define __pyx_int_944 __pyx_number_tab[16]
+#define __pyx_int_1080 __pyx_number_tab[17]
+#define __pyx_int_1304 __pyx_number_tab[18]
+#define __pyx_int_1555 __pyx_number_tab[19]
+#define __pyx_int_1704 __pyx_number_tab[20]
+#define __pyx_int_1920 __pyx_number_tab[21]
 /* #### Code section: module_state_clear ### */
 #if CYTHON_USE_MODULE_STATE
 static CYTHON_SMALL_CODE int __pyx_m_clear(PyObject *m) {
@@ -3472,7 +3473,7 @@ static CYTHON_SMALL_CODE int __pyx_m_clear(PyObject *m) {
   for (int i=0; i<15; ++i) { Py_CLEAR(clear_module_state->__pyx_tuple[i]); }
   for (int i=0; i<20; ++i) { Py_CLEAR(clear_module_state->__pyx_codeobj_tab[i]); }
   for (int i=0; i<359; ++i) { Py_CLEAR(clear_module_state->__pyx_string_tab[i]); }
-  for (int i=0; i<21; ++i) { Py_CLEAR(clear_module_state->__pyx_number_tab[i]); }
+  for (int i=0; i<22; ++i) { Py_CLEAR(clear_module_state->__pyx_number_tab[i]); }
 /* #### Code section: module_state_clear_contents ### */
 /* CommonTypesMetaclass.module_state_clear */
 Py_CLEAR(clear_module_state->__pyx_CommonTypesMetaclassType);
@@ -3508,7 +3509,7 @@ static CYTHON_SMALL_CODE int __pyx_m_traverse(PyObject *m, visitproc visit, void
   for (int i=0; i<15; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_tuple[i]); }
   for (int i=0; i<20; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_codeobj_tab[i]); }
   for (int i=0; i<359; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_string_tab[i]); }
-  for (int i=0; i<21; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_number_tab[i]); }
+  for (int i=0; i<22; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_number_tab[i]); }
 /* #### Code section: module_state_traverse_contents ### */
 /* CommonTypesMetaclass.module_state_traverse */
 Py_VISIT(traverse_module_state->__pyx_CommonTypesMetaclassType);
@@ -5207,7 +5208,7 @@ static PyObject *__pyx_pf_10ocr_detect_9OCRDetect___init__(CYTHON_UNUSED PyObjec
  * 
  *                     'skin_distance': None, 'A': None, 'B': None, 'Alpha': None, 'Zoom_scaler': 1.0, 'Is_Freeze': False, 'Is_HIFU': False}             # <<<<<<<<<<<<<<
  *         self.MEASSURE['Points_Per_MM'] = None
- *         # 2-frame confirmation debounce for jitter-prone bools.
+ *         # 5-frame confirmation debounce for jitter-prone bools.
 */
   if (PyDict_SetItem(__pyx_t_9, __pyx_mstate_global->__pyx_n_u_skin_distance, Py_None) < (0)) __PYX_ERR(0, 94, __pyx_L1_error)
   if (PyDict_SetItem(__pyx_t_9, __pyx_mstate_global->__pyx_n_u_A, Py_None) < (0)) __PYX_ERR(0, 94, __pyx_L1_error)
@@ -5231,7 +5232,7 @@ static PyObject *__pyx_pf_10ocr_detect_9OCRDetect___init__(CYTHON_UNUSED PyObjec
  * 
  *                     'skin_distance': None, 'A': None, 'B': None, 'Alpha': None, 'Zoom_scaler': 1.0, 'Is_Freeze': False, 'Is_HIFU': False}
  *         self.MEASSURE['Points_Per_MM'] = None             # <<<<<<<<<<<<<<
- *         # 2-frame confirmation debounce for jitter-prone bools.
+ *         # 5-frame confirmation debounce for jitter-prone bools.
  *         self._debounce_bool_state = {
 */
   __pyx_t_9 = __Pyx_PyObject_GetAttrStr(__pyx_v_self, __pyx_mstate_global->__pyx_n_u_MEASSURE); if (unlikely(!__pyx_t_9)) __PYX_ERR(0, 97, __pyx_L1_error)
@@ -5240,7 +5241,7 @@ static PyObject *__pyx_pf_10ocr_detect_9OCRDetect___init__(CYTHON_UNUSED PyObjec
   __Pyx_DECREF(__pyx_t_9); __pyx_t_9 = 0;
 
   /* "ocr_detect.py":100
- *         # 2-frame confirmation debounce for jitter-prone bools.
+ *         # 5-frame confirmation debounce for jitter-prone bools.
  *         self._debounce_bool_state = {
  *             "Is_Freeze": {"stable": False, "candidate": None, "count": 0},             # <<<<<<<<<<<<<<
  *             "Is_HIFU": {"stable": False, "candidate": None, "count": 0},
@@ -5273,7 +5274,7 @@ static PyObject *__pyx_pf_10ocr_detect_9OCRDetect___init__(CYTHON_UNUSED PyObjec
 
   /* "ocr_detect.py":99
  *         self.MEASSURE['Points_Per_MM'] = None
- *         # 2-frame confirmation debounce for jitter-prone bools.
+ *         # 5-frame confirmation debounce for jitter-prone bools.
  *         self._debounce_bool_state = {             # <<<<<<<<<<<<<<
  *             "Is_Freeze": {"stable": False, "candidate": None, "count": 0},
  *             "Is_HIFU": {"stable": False, "candidate": None, "count": 0},
@@ -8537,7 +8538,7 @@ static PyObject *__pyx_pf_10ocr_detect_9OCRDetect_14_debounce_bool(CYTHON_UNUSED
  * 
  *         count += 1             # <<<<<<<<<<<<<<
  *         st["count"] = count
- *         if count >= 2:
+ *         if count >= 5:
 */
   __pyx_t_2 = __Pyx_PyLong_AddObjC(__pyx_v_count, __pyx_mstate_global->__pyx_int_1, 1, 1, 0); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 227, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_2);
@@ -8548,7 +8549,7 @@ static PyObject *__pyx_pf_10ocr_detect_9OCRDetect_14_debounce_bool(CYTHON_UNUSED
  * 
  *         count += 1
  *         st["count"] = count             # <<<<<<<<<<<<<<
- *         if count >= 2:
+ *         if count >= 5:
  *             st["stable"] = raw
 */
   if (unlikely((PyObject_SetItem(__pyx_v_st, __pyx_mstate_global->__pyx_n_u_count, __pyx_v_count) < 0))) __PYX_ERR(0, 228, __pyx_L1_error)
@@ -8556,18 +8557,18 @@ static PyObject *__pyx_pf_10ocr_detect_9OCRDetect_14_debounce_bool(CYTHON_UNUSED
   /* "ocr_detect.py":229
  *         count += 1
  *         st["count"] = count
- *         if count >= 2:             # <<<<<<<<<<<<<<
+ *         if count >= 5:             # <<<<<<<<<<<<<<
  *             st["stable"] = raw
  *             st["candidate"] = None
 */
-  __pyx_t_2 = PyObject_RichCompare(__pyx_v_count, __pyx_mstate_global->__pyx_int_2, Py_GE); __Pyx_XGOTREF(__pyx_t_2); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 229, __pyx_L1_error)
+  __pyx_t_2 = PyObject_RichCompare(__pyx_v_count, __pyx_mstate_global->__pyx_int_5, Py_GE); __Pyx_XGOTREF(__pyx_t_2); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 229, __pyx_L1_error)
   __pyx_t_5 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_5 < 0))) __PYX_ERR(0, 229, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
   if (__pyx_t_5) {
 
     /* "ocr_detect.py":230
  *         st["count"] = count
- *         if count >= 2:
+ *         if count >= 5:
  *             st["stable"] = raw             # <<<<<<<<<<<<<<
  *             st["candidate"] = None
  *             st["count"] = 0
@@ -8578,7 +8579,7 @@ static PyObject *__pyx_pf_10ocr_detect_9OCRDetect_14_debounce_bool(CYTHON_UNUSED
     __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
 
     /* "ocr_detect.py":231
- *         if count >= 2:
+ *         if count >= 5:
  *             st["stable"] = raw
  *             st["candidate"] = None             # <<<<<<<<<<<<<<
  *             st["count"] = 0
@@ -8612,7 +8613,7 @@ static PyObject *__pyx_pf_10ocr_detect_9OCRDetect_14_debounce_bool(CYTHON_UNUSED
     /* "ocr_detect.py":229
  *         count += 1
  *         st["count"] = count
- *         if count >= 2:             # <<<<<<<<<<<<<<
+ *         if count >= 5:             # <<<<<<<<<<<<<<
  *             st["stable"] = raw
  *             st["candidate"] = None
 */
@@ -18348,17 +18349,17 @@ const char* const bytes = "013, 24, 160A:B:Failed to parse roi1_capture config; 
   }
   {
     PyObject **numbertab = __pyx_mstate->__pyx_number_tab + 2;
-    int8_t const cint_constants_1[] = {0,1,2,8,10,15,20,100};
+    int8_t const cint_constants_1[] = {0,1,2,5,8,10,15,20,100};
     int16_t const cint_constants_2[] = {152,217,384,734,822,944,1080,1304,1555,1704,1920};
-    for (int i = 0; i < 19; i++) {
-      numbertab[i] = PyLong_FromLong((i < 8 ? cint_constants_1[i - 0] : cint_constants_2[i - 8]));
+    for (int i = 0; i < 20; i++) {
+      numbertab[i] = PyLong_FromLong((i < 9 ? cint_constants_1[i - 0] : cint_constants_2[i - 9]));
       if (unlikely(!numbertab[i])) __PYX_ERR(0, 1, __pyx_L1_error)
     }
   }
   #if CYTHON_IMMORTAL_CONSTANTS
   {
     PyObject **table = __pyx_mstate->__pyx_number_tab;
-    for (Py_ssize_t i=0; i<21; ++i) {
+    for (Py_ssize_t i=0; i<22; ++i) {
       #if CYTHON_COMPILING_IN_CPYTHON_FREETHREADING
       #if PY_VERSION_HEX < 0x030E0000
       if (_Py_IsOwnedByCurrentThread(table[i]) && Py_REFCNT(table[i]) == 1)

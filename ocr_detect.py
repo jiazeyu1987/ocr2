@@ -95,7 +95,7 @@ class OCRDetect:
 
                     'skin_distance': None, 'A': None, 'B': None, 'Alpha': None, 'Zoom_scaler': 1.0, 'Is_Freeze': False, 'Is_HIFU': False}
         self.MEASSURE['Points_Per_MM'] = None
-        # 2-frame confirmation debounce for jitter-prone bools.
+        # 5-frame confirmation debounce for jitter-prone bools.
         self._debounce_bool_state = {
             "Is_Freeze": {"stable": False, "candidate": None, "count": 0},
             "Is_HIFU": {"stable": False, "candidate": None, "count": 0},
@@ -226,7 +226,7 @@ class OCRDetect:
 
         count += 1
         st["count"] = count
-        if count >= 2:
+        if count >= 5:
             st["stable"] = raw
             st["candidate"] = None
             st["count"] = 0
