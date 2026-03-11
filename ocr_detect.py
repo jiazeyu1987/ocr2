@@ -169,7 +169,7 @@ class OCRDetect:
         freeze_pos_col_rb = 1660 - 1304  # 286；該results的image相對於全尺寸的img的位置
         freeze_pos_row_rb = 938 - 822  # = 46；該results的image相對於全尺寸的img的位置
 
-        freeze_text = ["*", "米", "焦深", "管宽"]
+        freeze_text = ["*", "米", "焦深", "管宽", "B", "C", "测距"]
 
         for batch_id in range(len(results)):
             batch = results[batch_id]
@@ -480,7 +480,7 @@ class OCRDetect:
             r1 = 822 - oy
             r2 = 944 - oy
             c1 = 1304 - ox
-            c2 = c1 + 384  # fixed width for main OCR region
+            c2 = 1909 - ox  # fixed right boundary (open interval) for main OCR region
 
             r1 = max(0, min(int(r1), h))
             r2 = max(0, min(int(r2), h))
@@ -504,7 +504,7 @@ class OCRDetect:
             self._consecutive_failures = 0
             self._last_error = None
 
-        # self.results_show(img[822:944, 1304:], results)
+        # self.results_show(img[822:944, 1304:1909], results)
 
         zoom_scaler = self.find_Zoom_Scaler_in_ocr_results(results)
         is_freeze = self.find_is_freeze_in_ocr_results(results)
