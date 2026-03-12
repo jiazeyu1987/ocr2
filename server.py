@@ -472,6 +472,9 @@ class ImageProcessServer:
 
             # Second OFFLINE signal (same point_id): stop current session.
             if active is not None and active.get("point_id") == point_id:
+                t_stop_total = time.perf_counter()
+                stop_recv_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                self.logger.info(f"[OFFLINE-PROFILE] step=stop_recv, seq={seq}, point_id={point_id}, ts={stop_recv_ts}")
                 self._pdbg(f"OFFLINE action: seq={seq}, point_id={point_id}, action=stop (same as active)")
                 self._offline_point_req_count[point_key] = accepted_count + 1
                 self.logger.info(
@@ -497,6 +500,7 @@ class ImageProcessServer:
                     ev = active.get("stop_event")
                     if ev is not None:
                         ev.set()
+                        self.logger.info(f"[OFFLINE-PROFILE] step=stop_signal_set, seq={seq}, point_id={point_id}, elapsed_ms={(time.perf_counter()-t_stop_total)*1000.0:.1f}")
                 except Exception:
                     pass
                 try:
@@ -504,6 +508,8 @@ class ImageProcessServer:
                 except Exception:
                     wait_timeout = 20.0
                 wait_timeout = max(1.0, min(wait_timeout, 120.0))
+                self.logger.info(f"[OFFLINE-PROFILE] step=stop_wait_begin, seq={seq}, point_id={point_id}, wait_timeout_s={wait_timeout}")
+                t_wait = time.perf_counter()
                 try:
                     if finished_ev is not None:
                         finished_ok = bool(finished_ev.wait(timeout=wait_timeout))
@@ -512,12 +518,14 @@ class ImageProcessServer:
                         finished_ok = not t.is_alive()
                 except Exception:
                     finished_ok = False
+                self.logger.info(f"[OFFLINE-PROFILE] step=stop_wait_done, seq={seq}, point_id={point_id}, finished_ok={bool(finished_ok)}, wait_elapsed_ms={(time.perf_counter()-t_wait)*1000.0:.1f}, total_elapsed_ms={(time.perf_counter()-t_stop_total)*1000.0:.1f}")
                 roi2_color = self._get_tool_roi2_color(tool)
                 stop_info = "offline_stop_completed" if finished_ok else "offline_stop_timeout"
                 self.logger.info(
                     f"[OFFLINE-STOP-SEND] seq={seq}, point_id={point_id}, roi2_color={roi2_color}, "
                     f"roi2_final={bool(finished_ok)}, info={stop_info}"
                 )
+                self.logger.info(f"[OFFLINE-PROFILE] step=stop_response_send, seq={seq}, point_id={point_id}, total_elapsed_ms={(time.perf_counter()-t_stop_total)*1000.0:.1f}")
                 try:
                     self._offline_orphans.append(active)
                 except Exception:

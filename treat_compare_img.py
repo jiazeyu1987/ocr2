@@ -113,6 +113,7 @@ class ComparePoints:
         self._stop_requested_ts = None
         self._stage = "init"
         self._stage_detail = None
+        self.final_roi2_color = "red"
         # External single-flag output (overwritten each OFFLINE session).
         # Contains only "1" (success) or "0" (failure).
         self._result_flag_path = r"D:/software_data/result.txt"
@@ -215,6 +216,31 @@ class ComparePoints:
     def _tmp_dbg(self, msg):
         if self._tmp_frames_enabled and self.logger:
             self.logger.info(f"[tmp] {msg}")
+
+    def _profile(self, step: str, t0: Optional[float] = None, extra: str = ""):
+        if not self.logger:
+            return
+        try:
+            now_wall = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            now_perf = time.perf_counter()
+            since_stop_ms = None
+            try:
+                if self._stop_requested_ts is not None:
+                    since_stop_ms = (time.time() - float(self._stop_requested_ts)) * 1000.0
+            except Exception:
+                since_stop_ms = None
+
+            elapsed_part = ""
+            if t0 is not None:
+                elapsed_part = f", elapsed_ms={(now_perf - float(t0)) * 1000.0:.1f}"
+            since_part = ""
+            if since_stop_ms is not None:
+                since_part = f", since_stop_ms={since_stop_ms:.1f}"
+            extra_part = f", {extra}" if extra else ""
+
+            self.logger.info(f"[OFFLINE-PROFILE] ts={now_wall}, step={step}{elapsed_part}{since_part}{extra_part}")
+        except Exception:
+            pass
 
     def _write_result_flag(self, ok: bool):
         """
@@ -662,11 +688,15 @@ class ComparePoints:
         return float(cv2.mean(roi, mask)[0])
 
     def inser_info_database(self, db_dir, id, before_path, after_path):
+        t_db_total = time.perf_counter()
+        self._profile("db_func_enter", extra=f"id={id}")
         dbpath = db_dir + "/ccwssm"
         backup_dbpath = db_dir + "/zccwssm"
 
+        t_db_connect = time.perf_counter()
         db = sqlite3.connect(dbpath, check_same_thread=False, timeout=30)
         db_backup = sqlite3.connect(backup_dbpath, check_same_thread=False, timeout=30)
+        self._profile("db_connect_done", t_db_connect)
 
         modifytime = datetime.now().strftime("%Y_%m_%d-%H_%M_%S_%f")[:-3]
 
@@ -681,14 +711,21 @@ class ComparePoints:
 
         image_path = before_path + ";" + after_path + ";" + after_path.replace("_after", "_diff")
 
+        t_db_execute = time.perf_counter()
         db.cursor().execute(sql_sentence, (image_path, modifytime, id))
         db_backup.cursor().execute(sql_sentence, (image_path, modifytime, id))
+        self._profile("db_execute_done", t_db_execute)
 
+        t_db_commit = time.perf_counter()
         db.commit()
         db_backup.commit()
+        self._profile("db_commit_done", t_db_commit)
 
+        t_db_close = time.perf_counter()
         db.cursor().close()
         db_backup.cursor().close()
+        self._profile("db_cursor_close_done", t_db_close)
+        self._profile("db_func_exit", t_db_total, f"id={id}")
 
     def convert_timestamp2str(self, timestamp):
         return timestamp.strftime("%Y-%m-%d_%H-%M-%S.%f")[:-3]
@@ -879,6 +916,8 @@ class ComparePoints:
     def write_img(self):
         if self.logger:
             self.logger.info("write_img...")
+        t_write_total = time.perf_counter()
+        self._profile("write_img_enter", extra=f"point_id={self.save_point_id}, is_save={self.is_save}")
         try:
             self._stage = "write_img"
             self._stage_detail = "start"
@@ -886,6 +925,7 @@ class ComparePoints:
             pass
 
         img_dir = "D:/software_data/imgs"
+        final_color = "red"
 
         before_path = f"{img_dir}/{self.before_name}_before.png"
         after_path = f"{img_dir}/{self.after_name}_after.png"
@@ -902,54 +942,57 @@ class ComparePoints:
             os.makedirs(img_dir)
 
         if self.compare_before is not None:
+            t_before_save = time.perf_counter()
             try:
                 self._stage_detail = "save_before"
             except Exception:
                 pass
+            t_before_convert = time.perf_counter()
             before_bgr = cv2.cvtColor(self.compare_before, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(before_path, before_bgr)
+            self._profile("write_before_convert_done", t_before_convert, f"shape={getattr(before_bgr, 'shape', None)}")
+            t_before_imwrite = time.perf_counter()
+            ok_before = bool(cv2.imwrite(before_path, before_bgr))
+            self._profile("write_before_imwrite_done", t_before_imwrite, f"path={before_path}, ok={ok_before}")
+            self._profile("write_before_saved", t_before_save, f"path={before_path}, ok={ok_before}")
         else:
             if self.logger:
                 self.logger.info("no compare before")
             before_bgr = None
 
         if self.compare_after is not None:
+            t_after_process = time.perf_counter()
             try:
                 self._stage_detail = "process_after"
             except Exception:
                 pass
-            try:
-                compare_after = image_difference.process_two_images(
-                    cv2.cvtColor(self.compare_before, cv2.COLOR_RGB2BGR),
-                    cv2.cvtColor(self.compare_after, cv2.COLOR_RGB2BGR),
-                    if_align=self.setting["if_align"],
-                    binary_threshold=self.setting["binary_threshold"],
-                    width_x=self.setting["width_x"],
-                    height_y=self.setting["height_y"],
-                    drawcontour=self.setting["drawcontour"],
-                )
-            except Exception as e:
-                if self.logger:
-                    self.logger.error(f"after processing failed: {e}; fallback to raw after")
-                compare_after = None
+            # Performance mode: skip contour/difference post-processing and save raw AFTER directly.
+            t_after_convert = time.perf_counter()
+            compare_after = cv2.cvtColor(self.compare_after, cv2.COLOR_RGB2BGR)
+            self._profile("write_after_convert_done", t_after_convert, f"shape={getattr(compare_after, 'shape', None)}")
+            self._profile("after_processing_skipped", t_after_process, "reason=contour_processing_disabled")
 
-            if compare_after is None:
-                compare_after = cv2.cvtColor(self.compare_after, cv2.COLOR_RGB2BGR)
-
-            cv2.imwrite(after_path, compare_after)
+            t_after_imwrite = time.perf_counter()
+            ok_after = bool(cv2.imwrite(after_path, compare_after))
+            self._profile("write_after_imwrite_done", t_after_imwrite, f"path={after_path}, ok={ok_after}")
+            self._profile("write_after_saved", t_after_process, f"path={after_path}, ok={ok_after}")
         else:
             if self.logger:
                 self.logger.info("no compare after")
             compare_after = None
 
         if self.compare_before is not None and self.compare_after is not None:
+            t_diff_total = time.perf_counter()
             try:
                 self._stage_detail = "save_diff"
             except Exception:
                 pass
+            t_diff_calc = time.perf_counter()
+            t_diff_sub = time.perf_counter()
             direct_diff = np.array(self.compare_after).astype(np.float32) - np.array(self.compare_before).astype(np.float32)
+            self._profile("diff_subtract_done", t_diff_sub)
             direct_diff[np.where(direct_diff < 0)] = 0
             direct_diff = direct_diff.astype(np.uint8)
+            self._profile("diff_calculated", t_diff_calc, f"shape={getattr(direct_diff, 'shape', None)}")
             # Differ success/failure: based on peak_detect(SimpleFEM) final color.
             # If peak_detect is disabled or color is unknown, treat as failure.
             is_success = False
@@ -957,21 +1000,32 @@ class ComparePoints:
                 is_success = bool(self._sf_enabled and str(self._sf_color or "").lower() == "green")
             except Exception:
                 is_success = False
+            final_color = "green" if is_success else "red"
             # Draw FEM result label on the diff image (if enabled and available)
             try:
                 if direct_diff.ndim == 3:
+                    t_diff_bgr = time.perf_counter()
                     diff_bgr = cv2.cvtColor(direct_diff, cv2.COLOR_RGB2BGR)
                 else:
+                    t_diff_bgr = time.perf_counter()
                     diff_bgr = cv2.cvtColor(direct_diff, cv2.COLOR_GRAY2BGR)
+                self._profile("differ_convert_done", t_diff_bgr, f"shape={getattr(diff_bgr, 'shape', None)}")
+                t_overlay = time.perf_counter()
                 diff_bgr = self._draw_fem_result_on_diff(diff_bgr)
+                self._profile("differ_overlay_done", t_overlay)
                 diff_path = after_path.replace("_after", "_diff")
                 ok = False
                 try:
+                    t_diff_imwrite = time.perf_counter()
                     ok = bool(cv2.imwrite(diff_path, diff_bgr))
+                    self._profile("differ_imwrite_done", t_diff_imwrite, f"path={diff_path}, ok={ok}")
                 except Exception:
                     ok = False
+                self._profile("differ_saved", t_diff_total, f"path={diff_path}, ok={ok}, success={is_success}")
                 if ok:
+                    t_flag = time.perf_counter()
                     self._write_result_flag(is_success)
+                    self._profile("result_flag_written", t_flag, f"success={is_success}")
 
                 # Also save diff/differ image into tmp session folder (if enabled) for easier offline inspection.
                 if self._tmp_frames_enabled and self._tmp_session_dir:
@@ -998,11 +1052,16 @@ class ComparePoints:
                 diff_path = after_path.replace("_after", "_diff")
                 ok = False
                 try:
+                    t_diff_imwrite = time.perf_counter()
                     ok = bool(cv2.imwrite(diff_path, direct_diff))
+                    self._profile("differ_imwrite_done", t_diff_imwrite, f"path={diff_path}, ok={ok}")
                 except Exception:
                     ok = False
+                self._profile("differ_saved_fallback", t_diff_total, f"path={diff_path}, ok={ok}, success={is_success}")
                 if ok:
+                    t_flag = time.perf_counter()
                     self._write_result_flag(is_success)
+                    self._profile("result_flag_written", t_flag, f"success={is_success}")
                 if self._tmp_frames_enabled and self._tmp_session_dir:
                     try:
                         ts = self.after_name or self.before_name or datetime.now().strftime("%Y-%m-%d_%H-%M-%S.%f")[:-3]
@@ -1032,9 +1091,15 @@ class ComparePoints:
                 self.logger.info("no compare diff")
             diff_bgr = None
 
+        try:
+            self.final_roi2_color = "green" if str(final_color).strip().lower() == "green" else "red"
+        except Exception:
+            self.final_roi2_color = "red"
+
         # Save canonical BEFORE/AFTER/DIFFER images into the same tmp session folder (if enabled).
         # This makes it easy to locate the final trio without guessing frame indices.
         if self._tmp_frames_enabled and self._tmp_session_dir:
+            t_final_trio = time.perf_counter()
             try:
                 ts = self.after_name or self.before_name or datetime.now().strftime("%Y-%m-%d_%H-%M-%S.%f")[:-3]
 
@@ -1078,8 +1143,10 @@ class ComparePoints:
                     )
             except Exception as e:
                 self._tmp_dbg(f"save final trio to tmp failed: {e}")
+            self._profile("final_trio_saved", t_final_trio, f"tmp_enabled={self._tmp_frames_enabled}")
 
         if self.is_save:
+            t_db = time.perf_counter()
             try:
                 try:
                     self._stage_detail = "db_insert"
@@ -1087,18 +1154,25 @@ class ComparePoints:
                     pass
                 if self.logger:
                     self.logger.info("insert database---")
+                self._profile("db_insert_begin", extra=f"point_id={self.save_point_id}")
                 self.inser_info_database(self.db_dir, self.save_point_id, before_path, after_path)
                 if self.logger:
                     self.logger.info("insert database---success")
+                self._profile("db_insert_done", t_db, f"point_id={self.save_point_id}")
             except OSError as e:
                 if self.logger:
                     self.logger.error(f"path error: {e}, {self.db_dir}, {self.save_point_id}, {before_path}, {after_path}")
+                self._profile("db_insert_error", t_db, f"type=OSError, err={e}")
             except sqlite3.OperationalError as e:
                 if self.logger:
                     self.logger.error(f"db error: {e}")
+                self._profile("db_insert_error", t_db, f"type=sqlite, err={e}")
             except Exception as e:
                 if self.logger:
                     self.logger.error(f"other error: {e}")
+                self._profile("db_insert_error", t_db, f"type=other, err={e}")
+
+        self._profile("write_img_exit", t_write_total)
 
     def get_screen_shot(self):
         img_time = datetime.now()
@@ -1134,6 +1208,7 @@ class ComparePoints:
         self.point_id = point_id
         self.save_point_id = point_id
         self.is_save = is_save
+        self.final_roi2_color = "red"
         # In normal server flow, stop_event is always provided.
         # Keep a safe fallback for direct/manual calls.
         stop_event_provided = stop_event is not None
@@ -1391,6 +1466,7 @@ class ComparePoints:
                 self._capture_done_event.set()
         except Exception:
             pass
+        self._profile("capture_loop_end", extra=f"frames={frame_counter}, timed_out={timed_out}")
         try:
             self._stage = "post_capture"
             self._stage_detail = None
@@ -1414,6 +1490,8 @@ class ComparePoints:
 
         # stop fallback: if after not captured, use stop-time screenshot as after
         if self.compare_after is None and self._stop_event is not None and self._stop_event.is_set():
+            t_stop_fallback = time.perf_counter()
+            self._profile("after_stop_fallback_begin")
             try:
                 stop_img, stop_time = self.get_screen_shot()
                 self.compare_after = np.array(stop_img)
@@ -1434,15 +1512,19 @@ class ComparePoints:
                 except Exception:
                     roi1_gray = None
                 self._tmp_record_frame(self.compare_after, stop_time, frame_counter + 1, "after_timeout" if timed_out else "after_stop", roi1_gray=roi1_gray)
+                self._profile("after_stop_fallback_done", t_stop_fallback, f"after_name={self.after_name}")
             except Exception as e:
                 stop_fallback_failed = True
                 if self.logger:
                     self.logger.error(f"fallback stop-time screenshot failed (post-loop): {e}")
                 self._dbg(f"compare_after stop-time fallback failed: {e}")
+                self._profile("after_stop_fallback_error", t_stop_fallback, f"err={e}")
 
         # final fallback:
         # - only when stop fallback screenshot failed, OR stop_event was not provided
         if self.compare_after is None and ((not stop_event_provided) or stop_fallback_failed):
+            t_final_fallback = time.perf_counter()
+            self._profile("after_final_fallback_begin")
             if self.logger:
                 self.logger.warning("can not find after, fallback to a final screenshot")
             after_img, after_t = self.get_screen_shot()
@@ -1459,8 +1541,10 @@ class ComparePoints:
             except Exception:
                 roi1_gray = None
             self._tmp_record_frame(self.compare_after, after_t, frame_counter + 1, "after_final", roi1_gray=roi1_gray)
+            self._profile("after_final_fallback_done", t_final_fallback, f"after_name={self.after_name}")
 
         # First-layer判定：ROI2(before) vs ROI2(after) 灰度均值差
+        t_roi_eval = time.perf_counter()
         if self._sf_enabled:
             # Ensure we have ROI2 rect; if not, try to locate using BEFORE again (may reuse last cache).
             if self._sf_roi2_rect is None and self.compare_before is not None:
@@ -1515,9 +1599,17 @@ class ComparePoints:
             else:
                 self._sf_dbg("roi2 diff 판단跳过：roi2_rect/before/after 不齐全")
 
+        self._profile(
+            "roi2_roi3_eval_done",
+            t_roi_eval,
+            f"sf_enabled={self._sf_enabled}, roi2_color={self._sf_color}, roi2_diff={self._sf_roi2_diff}",
+        )
+
         # Second OFFLINE signal triggers stop_event; only then do we flush buffered tmp frames to disk.
         if self._tmp_frames_enabled and stop_event_provided and self._stop_event is not None and self._stop_event.is_set():
+            t_tmp_flush = time.perf_counter()
             self._tmp_flush_on_stop(point_id)
+            self._profile("tmp_flush_done", t_tmp_flush, f"tmp_enabled={self._tmp_frames_enabled}")
 
         try:
             try:
@@ -1526,7 +1618,10 @@ class ComparePoints:
             except Exception:
                 pass
             self._dbg(f"write_img start: before_name={self.before_name}, after_name={self.after_name}, is_save={self.is_save}")
+            t_write = time.perf_counter()
+            self._profile("write_img_call_begin", extra=f"before={self.before_name}, after={self.after_name}")
             self.write_img()
+            self._profile("write_img_call_done", t_write)
             self._dbg("write_img done")
         except Exception as e:
             if self.logger:
