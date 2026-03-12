@@ -1,3 +1,4 @@
+# -*- coding: latin-1 -*-
 import os
 
 # Work around OpenMP runtime conflicts on Windows (common with MKL + Paddle/OpenCV).
@@ -21,9 +22,9 @@ class ImageProcessServer:
     def __init__(self):
 
         # logging.basicConfig(
-        #     level=logging.INFO,  # 设置日志级别为 INFO，这意味着 INFO 及以上级别的日志会被记录
+        #     level=logging.INFO,  # 设置日志级别�?INFO，这意味着 INFO 及以上级别的日志会被记录
         #     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',  # 设置日志格式
-        #     filename='ocrserver.log',  # 指定日志输出文件，如果不指定则默认输出到控制台
+        #     filename='ocrserver.log',  # 指定日志输出文件，如果不指定则默认输出到控制�?
         #     filemode="a"
         # )
 
@@ -31,22 +32,14 @@ class ImageProcessServer:
         self.init_logger()
 
 
-        # 定义支持的请求类型
+        # 定义支持的请求类�?
         self.REQUEST_TYPES = {
 
-            'Offline': '不需要实时获取的，界面显示的内容; 以json格式返回',
-            # {'SCALER':'进行超声可以放大和缩小，每个小刻度代表1mm，此时对应的图片像素点的个数'},
-
-
-            'Online' : '需要实时获取的,界面显示的任何东西; 以json的字符串返回',
-            # {'SKINDEPTH': '思多科测量显示的皮肤到焦点的距离',
-            # 'DEPTH': '思多科超声显示的深度',
-            # 'A': '思多科显示的长度A',
-            # 'B': '思多科显示的长度B',
-            # 'ANGLE': '思多科显示的A与B的角度',}
-            'OCR': "獲取OCR的狀態",
-            'CLOSEOCR': "關掉OCR的一直識別",
-            'OPENOCR': "打開OCR，一直識別",
+            "Offline": "offline request",
+            "Online": "online request",
+            "OCR": "get OCR status",
+            "CLOSEOCR": "close OCR loop",
+            "OPENOCR": "open OCR loop",
         }
 
         self.setting = self.load_setting()
@@ -62,6 +55,33 @@ class ImageProcessServer:
         self._offline_req_seq = 0
         self._offline_last_action = {}  # point_id -> {"action": "start"/"stop", "ts": float, "seq": int}
         self._offline_point_req_count = {}  # point_id -> accepted OFFLINE request count (max 2)
+        # Bound offline history maps to avoid unbounded memory growth with ever-new point_id.
+        try:
+            self._offline_history_max_points = int((self.setting or {}).get("offline_history_max_points", 2000))
+        except Exception:
+            self._offline_history_max_points = 2000
+        try:
+            self._offline_history_ttl_seconds = float((self.setting or {}).get("offline_history_ttl_seconds", 6 * 3600))
+        except Exception:
+            self._offline_history_ttl_seconds = float(6 * 3600)
+
+        self._client_state_lock = threading.Lock()
+        self._active_client_connections = 0
+        try:
+            self._max_client_connections = int((self.setting or {}).get("max_client_connections", 64))
+        except Exception:
+            self._max_client_connections = 64
+        try:
+            self._client_socket_timeout_seconds = float((self.setting or {}).get("client_socket_timeout_seconds", 30.0))
+        except Exception:
+            self._client_socket_timeout_seconds = 30.0
+
+        self.logger.info(
+            f"offline history guard enabled: max_points={self._offline_history_max_points}, ttl_s={self._offline_history_ttl_seconds}"
+        )
+        self.logger.info(
+            f"client connection guard enabled: max_conn={self._max_client_connections}, recv_timeout_s={self._client_socket_timeout_seconds}"
+        )
 
         self.ocrserver = OCRDetect(self.setting, self.logger)
 
@@ -71,7 +91,7 @@ class ImageProcessServer:
 
 
         # for 治疗前后对比截图
-        self.logger.info("成功导入对比截图工具")
+        self.logger.info("compare tool loaded")
 
         self.point_id = None
         self.client_thread = None
@@ -88,7 +108,7 @@ class ImageProcessServer:
         self._offline_session = None  # dict(point_id, thread, stop_event, tool)
         self._offline_orphans = []
         self.compareTool = None
-        # 为了首次调用服务器时不延迟，此处默认调用一次
+        # 为了首次调用服务器时不延迟，此处默认调用一�?
         # default_offline = {"point_id": 3141592653, "is_save": False, "time_out": 100}
         # self.get_offline(json.dumps(default_offline))
         # time.sleep(1)
@@ -96,27 +116,27 @@ class ImageProcessServer:
 
 
     def init_logger(self, dst='ocrlog'):
-        # 如果没有指定日志文件，则使用当前日期作为文件名
+        # 如果没有指定日志文件，则使用当前日期作为文件�?
         if not os.path.exists(dst):
             os.makedirs(dst)
         today = datetime.now().strftime("%Y-%m-%d")
         log_file = os.path.join(dst, f"ocrapp_{today}.log")
 
-        # 配置日志
+        # �
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)  # 设置日志级别为DEBUG
 
-        # 创建文件处理器
+        # 创建文件处理�?
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
 
-        # 创建格式化器并添加到处理器
+        # 创建格式化器并添加到处理�?
         formatter = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
         file_handler.setFormatter(formatter)
 
-        # 添加处理器到日志器
+        # 添加处理器到日志�?
         if not self.logger.handlers:
             self.logger.addHandler(file_handler)
 
@@ -159,6 +179,93 @@ class ImageProcessServer:
                 self.logger.info(f"[peakdbg] {msg}")
         except Exception:
             pass
+
+    def _prune_offline_history_locked(self):
+        """
+        Prune in-memory OFFLINE history maps to keep memory bounded.
+        Must be called under self._offline_lock.
+        """
+        try:
+            max_points = max(100, int(getattr(self, "_offline_history_max_points", 2000)))
+        except Exception:
+            max_points = 2000
+        try:
+            ttl = max(60.0, float(getattr(self, "_offline_history_ttl_seconds", 6 * 3600)))
+        except Exception:
+            ttl = float(6 * 3600)
+
+        now_ts = time.time()
+        removed = 0
+
+        try:
+            stale_keys = []
+            for k, v in list((self._offline_last_action or {}).items()):
+                ts = None
+                try:
+                    ts = float((v or {}).get("ts"))
+                except Exception:
+                    ts = None
+                if ts is None or (now_ts - ts) > ttl:
+                    stale_keys.append(k)
+            for k in stale_keys:
+                if k in self._offline_last_action:
+                    self._offline_last_action.pop(k, None)
+                    removed += 1
+                self._offline_point_req_count.pop(k, None)
+        except Exception:
+            pass
+
+        try:
+            if len(self._offline_last_action) > max_points:
+                ordered = sorted(
+                    self._offline_last_action.items(),
+                    key=lambda kv: float(((kv[1] or {}).get("ts")) or 0.0),
+                    reverse=True,
+                )
+                keep_keys = {k for (k, _) in ordered[:max_points]}
+                drop_keys = [k for k in self._offline_last_action.keys() if k not in keep_keys]
+                for k in drop_keys:
+                    self._offline_last_action.pop(k, None)
+                    self._offline_point_req_count.pop(k, None)
+                    removed += 1
+        except Exception:
+            pass
+
+        try:
+            if len(self._offline_point_req_count) > max_points:
+                count_keys = list(self._offline_point_req_count.keys())
+                for k in count_keys[:-max_points]:
+                    self._offline_point_req_count.pop(k, None)
+                    removed += 1
+        except Exception:
+            pass
+
+        if removed > 0:
+            self._pdbg(
+                f"offline history pruned: removed={removed}, last_action={len(self._offline_last_action)}, "
+                f"req_count={len(self._offline_point_req_count)}"
+            )
+            self.logger.info(
+                f"offline history prune applied: removed={removed}, last_action={len(self._offline_last_action)}, req_count={len(self._offline_point_req_count)}"
+            )
+
+    @staticmethod
+    def _normalize_roi2_color(color):
+        return "green" if str(color).strip().lower() == "green" else "red"
+
+    def _get_tool_roi2_color(self, tool):
+        if tool is None:
+            return "red"
+        try:
+            color = getattr(tool, "final_roi2_color", None)
+        except Exception:
+            color = None
+        if color is None:
+            try:
+                color = (getattr(tool, "response", {}) or {}).get("roi2_color")
+            except Exception:
+                color = None
+        return self._normalize_roi2_color(color)
 
     def start_ocr_server(self):
         # 啓動實時識別
@@ -246,7 +353,7 @@ class ImageProcessServer:
     def get_online(self):
         """截图识别"""
 
-        # OCR 在线线程与读线程并发，优先使用线程安全快照
+        # OCR 在线线程与读线程并发，优�
         if hasattr(self.ocrserver, "get_measures"):
             m = self.ocrserver.get_measures()
         else:
@@ -284,7 +391,7 @@ class ImageProcessServer:
         self.logger.info("new offline method")
 
         if arg is None:
-            results = {'success':False, 'info': "输入参数有误！"}
+            results = {'success': False, 'info': 'invalid_input'}
             return results
 
         # Parse once so we can log the structured payload.
@@ -305,10 +412,11 @@ class ImageProcessServer:
         # if self.compareTool is None:
         #     from treat_compare_img import ComparePoints
         #     self.compareTool = ComparePoints(self.logger)
-        #     self.logger.info("成功导入对比截图工具")
+        self.logger.info("compare tool loaded")
 
         # Serialize OFFLINE start/stop to avoid starting two capture loops at the same time.
         with self._offline_lock:
+            self._prune_offline_history_locked()
             try:
                 point_key = int(point_id)
             except Exception:
@@ -370,19 +478,46 @@ class ImageProcessServer:
                     f"OFFLINE accepted: point_id={point_id}, accepted_count={self._offline_point_req_count[point_key]}, action=stop, seq={seq}"
                 )
                 self.point_id = None
+                tool = None
+                t = None
+                finished_ev = None
+                finished_ok = False
                 try:
                     tool = active.get("tool")
+                    t = active.get("thread")
                     if tool is not None:
                         try:
                             tool._stop_requested_ts = time.time()
                         except Exception:
                             pass
+                        try:
+                            finished_ev = getattr(tool, "_finished_event", None)
+                        except Exception:
+                            finished_ev = None
                     ev = active.get("stop_event")
                     if ev is not None:
                         ev.set()
                 except Exception:
                     pass
-                self.logger.info("stop set成功。")
+                try:
+                    wait_timeout = float((self.setting or {}).get("offline_stop_wait_timeout_seconds", 20.0))
+                except Exception:
+                    wait_timeout = 20.0
+                wait_timeout = max(1.0, min(wait_timeout, 120.0))
+                try:
+                    if finished_ev is not None:
+                        finished_ok = bool(finished_ev.wait(timeout=wait_timeout))
+                    elif t is not None:
+                        t.join(timeout=wait_timeout)
+                        finished_ok = not t.is_alive()
+                except Exception:
+                    finished_ok = False
+                roi2_color = self._get_tool_roi2_color(tool)
+                stop_info = "offline_stop_completed" if finished_ok else "offline_stop_timeout"
+                self.logger.info(
+                    f"[OFFLINE-STOP-SEND] seq={seq}, point_id={point_id}, roi2_color={roi2_color}, "
+                    f"roi2_final={bool(finished_ok)}, info={stop_info}"
+                )
                 try:
                     self._offline_orphans.append(active)
                 except Exception:
@@ -392,7 +527,13 @@ class ImageProcessServer:
                     self._offline_last_action[int(point_id)] = {"action": "stop", "ts": time.time(), "seq": seq}
                 except Exception:
                     pass
-                return {"success": True, "info": "offline_stop_requested", "point_id": point_id}
+                return {
+                    "success": True,
+                    "info": stop_info,
+                    "point_id": point_id,
+                    "roi2_color": roi2_color,
+                    "roi2_final": bool(finished_ok),
+                }
 
             # New point_id (or no active session): stop previous capture loop if needed.
             if active is not None:
@@ -509,7 +650,15 @@ class ImageProcessServer:
     def handle_client(self, client_socket, client_address):
         """处理客户端请求的函数"""
 
-        self.logger.info(f"接收到来自 {client_address} 的连接")
+        self.logger.info(f"client connected: {client_address}")
+
+        try:
+            client_socket.settimeout(max(1.0, float(self._client_socket_timeout_seconds)))
+            self.logger.info(
+                f"client timeout configured: addr={client_address}, timeout_s={self._client_socket_timeout_seconds}"
+            )
+        except Exception:
+            pass
 
         try:
             # IMPORTANT: TCP is a byte stream. A recv() may contain multiple requests (coalesced),
@@ -610,6 +759,7 @@ class ImageProcessServer:
                         try:
                             self.logger.info(req_type)
                             response = self.get_online()
+                            self.logger.info(f"ONLINE response: {response}")
                         except Exception as e:
                             self.logger.error("online返回错误:如下")
                             self.logger.error(e)
@@ -625,7 +775,11 @@ class ImageProcessServer:
                     client_socket.sendall((response + "\n").encode('utf-8'))
 
             while True:
-                chunk = client_socket.recv(4096)
+                try:
+                    chunk = client_socket.recv(4096)
+                except socket.timeout:
+                    self.logger.info(f"client recv timeout, closing connection: {client_address}")
+                    break
                 if not chunk:
                     break
                 buffer += chunk.decode('utf-8', errors='replace')
@@ -653,35 +807,69 @@ class ImageProcessServer:
 
 
         except Exception as e:
-            self.logger.error(f"处理客户端 {client_address} 时发生错误: {e}")
+            self.logger.error(f"处理客户�?{client_address} 时发生错�? {e}")
         finally:
-            # 关闭客户端连接
-            client_socket.close()
-            print(f"与 {client_address} 的连接已关闭")
+            try:
+                client_socket.close()
+            except Exception:
+                pass
+            try:
+                with self._client_state_lock:
+                    self._active_client_connections = max(0, int(self._active_client_connections) - 1)
+                    self.logger.info(
+                        f"client released: addr={client_address}, active_conn={self._active_client_connections}/{self._max_client_connections}"
+                    )
+            except Exception:
+                pass
+            print(f"connection closed: {client_address}")
 
     def start_server(self, host='localhost', port=12345):
-        """启动TCP服务器"""
-        # 创建TCP套接字
-
+        """Start TCP server."""
+        # 创建TCP套接�?
         # self.logger.info(f"start server: host={host}, port={port}")
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
-            # 设置套接字选项，允许地址重用
+            # 设置套接字选项，�
             server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-            # 绑定地址和端口
+            # 绑定地址和端�?
             server_socket.bind((host, port))
 
-            # 开始监听，最大连接数为5
+            # 开始监听，最大连接数�?
             server_socket.listen(5)
             print(f"服务器已启动，监听地址: {host}:{port}")
-            print(f"支持的请求类型: {', '.join([f'{k}({v})' for k, v in self.REQUEST_TYPES.items()])}")
+            print(f"支持的请求类�? {', '.join([f'{k}({v})' for k, v in self.REQUEST_TYPES.items()])}")
             self.logger.info(f"服务器已启动，监听地址: {host}:{port}")
 
             try:
                 while True:
-                    # 接受客户端连接
+                    # 接受客户端连�?
                     client_socket, client_address = server_socket.accept()
+                    reject = False
+                    try:
+                        with self._client_state_lock:
+                            if int(self._active_client_connections) >= int(self._max_client_connections):
+                                reject = True
+                            else:
+                                self._active_client_connections += 1
+                                self.logger.info(
+                                    f"client accepted: addr={client_address}, active_conn={self._active_client_connections}/{self._max_client_connections}"
+                                )
+                    except Exception:
+                        pass
+
+                    if reject:
+                        try:
+                            self.logger.warning(
+                                f"too many client connections ({self._active_client_connections}/{self._max_client_connections}), rejecting: {client_address}"
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            client_socket.close()
+                        except Exception:
+                            pass
+                        continue
 
                     if self.client_thread is not None:
                         del self.client_thread
