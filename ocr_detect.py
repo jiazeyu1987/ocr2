@@ -7,6 +7,7 @@ import threading
 import time, os
 import sys
 import ctypes
+import gc
 
 try:
     from screenshot_lock import SCREENSHOT_LOCK
@@ -79,7 +80,26 @@ class OCRDetect:
                        cls_model_dir=_abs_if_relative(setting['cls']) if 'cls' in setting else os.path.join(cur_dir, 'whl', 'cls', 'ch_ppocr_mobile_v2.0_cls_infer'),
                                    )  # need to run only once to download and load model into memory
         print(os.path.join(cur_dir, 'whl/cls/ch_ppocr_mobile_v2.0_cls_infer'))
-        self.time_skip = setting['time_skip'] if 'time_skip' in setting else 0
+        self.time_skip = float(setting['time_skip']) if 'time_skip' in setting else 0.0
+        # Optimization for long-running stability:
+        # - never run hot-spin loop at 0 sleep
+        # - allow pause/resume from server commands
+        self.min_loop_sleep_seconds = float(setting.get("min_loop_sleep_seconds", 0.03))
+        self.idle_sleep_seconds = float(setting.get("ocr_idle_sleep_seconds", 0.2))
+        self.gc_interval_seconds = float(setting.get("ocr_gc_interval_seconds", 300.0))
+        self._gc_last_ts = time.time()
+
+        self._ocr_enabled = bool(setting.get("ocr_enabled", True))
+        self._run_event = threading.Event()
+        if self._ocr_enabled:
+            self._run_event.set()
+        else:
+            self._run_event.clear()
+        self.logger.info(
+            f"OCR loop tuning: time_skip={self.time_skip}, min_loop_sleep_seconds={self.min_loop_sleep_seconds}, "
+            f"idle_sleep_seconds={self.idle_sleep_seconds}, gc_interval_seconds={self.gc_interval_seconds}, "
+            f"ocr_enabled={self._ocr_enabled}"
+        )
 
         self._measure_lock = threading.Lock()
         self._health_lock = threading.Lock()
@@ -549,14 +569,33 @@ class OCRDetect:
     def start_ocr_server(self):
         while True:
             try:
+                if not self._run_event.is_set():
+                    time.sleep(max(0.01, self.idle_sleep_seconds))
+                    continue
                 self.ocr_instant()
-                time.sleep(self.time_skip)
+                loop_sleep = max(float(self.time_skip), float(self.min_loop_sleep_seconds))
+                time.sleep(loop_sleep)
+                now = time.time()
+                if (now - self._gc_last_ts) >= self.gc_interval_seconds:
+                    try:
+                        gc.collect()
+                        self.logger.info(
+                            f"OCR periodic GC triggered, interval_s={self.gc_interval_seconds}"
+                        )
+                    except Exception:
+                        self.logger.exception("OCR periodic GC failed")
+                    self._gc_last_ts = now
             except Exception:
                 self.logger.exception("Unhandled error in OCR loop")
                 time.sleep(0.5)
 
     def stop_ocr_server(self):
-        pass
+        self._run_event.clear()
+        self.logger.info("OCR loop paused by CLOSEOCR")
+
+    def open_ocr_server(self):
+        self._run_event.set()
+        self.logger.info("OCR loop resumed by OPENOCR")
 
     def get_measures(self):
         with self._measure_lock:

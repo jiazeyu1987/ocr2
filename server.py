@@ -347,7 +347,24 @@ class ImageProcessServer:
 
 
     def close_ocr_server(self):
-        pass
+        try:
+            if hasattr(self.ocrserver, "stop_ocr_server"):
+                self.ocrserver.stop_ocr_server()
+            self.logger.info("CLOSEOCR applied: OCR loop paused")
+            return True
+        except Exception as e:
+            self.logger.error(f"CLOSEOCR failed: {e}")
+            return False
+
+    def open_ocr_server(self):
+        try:
+            if hasattr(self.ocrserver, "open_ocr_server"):
+                self.ocrserver.open_ocr_server()
+            self.logger.info("OPENOCR applied: OCR loop resumed")
+            return True
+        except Exception as e:
+            self.logger.error(f"OPENOCR failed: {e}")
+            return False
 
 
     def get_online(self):
@@ -772,9 +789,17 @@ class ImageProcessServer:
                             self.logger.error("online返回错误:如下")
                             self.logger.error(e)
                             response = None
+                    elif req_type == 'CLOSEOCR':
+                        self.close_ocr_server()
+                        response = {'success': True,  'info': "close ocr successfully"}
+                    elif req_type == 'OPENOCR':
+                        self.open_ocr_server()
+                        response = {'success': True, 'info': "open ocr successfully"}
+                    elif req_type == 'OCR':
+                        response = {'success': True, 'health': self.ocrserver.get_health()}
                     elif req_type == 'CLOSE':
                         self.close_ocr_server()
-                        response = {'success': True,  'info': "close successfully"}
+                        response = {'success': True,  'info': "close ocr successfully"}
                     else:
                         response = {'success': False, 'info': f"错误: 未知请求类型 '{req_type}'。支持的类型: {', '.join(self.REQUEST_TYPES.keys())}"}
 
