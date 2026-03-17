@@ -71,16 +71,12 @@ class ImageProcessServer:
             self._max_client_connections = int((self.setting or {}).get("max_client_connections", 64))
         except Exception:
             self._max_client_connections = 64
-        try:
-            self._client_socket_timeout_seconds = float((self.setting or {}).get("client_socket_timeout_seconds", 30.0))
-        except Exception:
-            self._client_socket_timeout_seconds = 30.0
 
         self.logger.info(
             f"offline history guard enabled: max_points={self._offline_history_max_points}, ttl_s={self._offline_history_ttl_seconds}"
         )
         self.logger.info(
-            f"client connection guard enabled: max_conn={self._max_client_connections}, recv_timeout_s={self._client_socket_timeout_seconds}"
+            f"client connection guard enabled: max_conn={self._max_client_connections}"
         )
 
         self.ocrserver = OCRDetect(self.setting, self.logger)
@@ -677,13 +673,6 @@ class ImageProcessServer:
 
         self.logger.info(f"client connected: {client_address}")
 
-        try:
-            client_socket.settimeout(max(1.0, float(self._client_socket_timeout_seconds)))
-            self.logger.info(
-                f"client timeout configured: addr={client_address}, timeout_s={self._client_socket_timeout_seconds}"
-            )
-        except Exception:
-            pass
 
         try:
             # IMPORTANT: TCP is a byte stream. A recv() may contain multiple requests (coalesced),
@@ -808,11 +797,7 @@ class ImageProcessServer:
                     client_socket.sendall((response + "\n").encode('utf-8'))
 
             while True:
-                try:
-                    chunk = client_socket.recv(4096)
-                except socket.timeout:
-                    self.logger.info(f"client recv timeout, closing connection: {client_address}")
-                    break
+                chunk = client_socket.recv(4096)
                 if not chunk:
                     break
                 buffer += chunk.decode('utf-8', errors='replace')
