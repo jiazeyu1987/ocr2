@@ -642,6 +642,12 @@ class ImageProcessServer:
             except Exception:
                 pass
             self._pdbg(f"OFFLINE action: seq={seq}, point_id={point_id}, action=start")
+            t_start_total = time.perf_counter()
+            start_recv_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            self.logger.info(
+                f"[OFFLINE-PROFILE] step=start_recv, seq={seq}, point_id={point_id}, ts={start_recv_ts}, "
+                f"time_out={time_out}, is_save={is_save}"
+            )
             self.point_id = point_id
             stop_event = threading.Event()
             tool = ComparePoints(self.setting, self.logger)
@@ -658,6 +664,10 @@ class ImageProcessServer:
             self.compare_stop_event = stop_event
             self.compare_client = t
             t.start()
+            self.logger.info(
+                f"[OFFLINE-PROFILE] step=start_thread_started, seq={seq}, point_id={point_id}, "
+                f"total_elapsed_ms={(time.perf_counter()-t_start_total)*1000.0:.1f}"
+            )
             try:
                 self._offline_last_action[int(point_id)] = {"action": "start", "ts": time.time(), "seq": seq}
             except Exception:

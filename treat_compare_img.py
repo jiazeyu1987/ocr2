@@ -242,6 +242,22 @@ class ComparePoints:
         except Exception:
             pass
 
+    def _timeline(self, step: str, **fields):
+        if not self.logger:
+            return
+        try:
+            parts = [f"step={step}"]
+            for key, value in fields.items():
+                if value is None:
+                    continue
+                if isinstance(value, float):
+                    parts.append(f"{key}={value:.1f}")
+                else:
+                    parts.append(f"{key}={value}")
+            self.logger.info("[OFFLINE-TIMELINE] " + ", ".join(parts))
+        except Exception:
+            pass
+
     def _write_result_flag(self, ok: bool):
         """
         Overwrite D:/software_data/result.txt with a single char:
@@ -1236,11 +1252,25 @@ class ComparePoints:
         except Exception:
             deadline_ts = None
         timed_out = False
+        detect_t0 = time.perf_counter()
+        detect_wall_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
         self.compare_before = None
         self.compare_after = None
         self.before_name = ""
         self.after_name = ""
+        before_capture_perf = None
+        after_capture_perf = None
+        after_method = None
+
+        self._timeline(
+            "session_start",
+            point_id=point_id,
+            ts=detect_wall_ts,
+            duration_s=float(duration),
+            is_save=bool(is_save),
+            stop_event_provided=bool(stop_event_provided)
+        )
 
         # Reset tmp session
         self._tmp_session_dir = None
@@ -1337,6 +1367,7 @@ class ComparePoints:
                 if frame_counter == 1 and self.compare_before is None:
                     self.compare_before = frame
                     self.before_name = self.convert_timestamp2str(img_time)
+                    before_capture_perf = time.perf_counter()
                     if self.logger:
                         self.logger.info(self.before_name + ", before img founded (first frame)")
                     self._dbg(f"compare_before captured at frame=1, ts={self.before_name}")
@@ -1369,6 +1400,15 @@ class ComparePoints:
                         )
                     else:
                         self._dbg(f"before_gray_mean set: {before_gray_mean:.3f}")
+                    self._timeline(
+                        "before_captured",
+                        point_id=point_id,
+                        capture_ts=self.before_name,
+                        frame=frame_counter,
+                        session_elapsed_ms=(before_capture_perf - detect_t0) * 1000.0 if before_capture_perf is not None else None,
+                        before_gray_mean=float(before_gray_mean),
+                        peak_threshold=float(peak_threshold) if peak_threshold is not None else None
+                    )
                     # First OFFLINE signal: record BEFORE frame with ROI1 mean.
                     if self._tmp_frames_enabled and self._tmp_session_dir and self.compare_before is not None:
                         self._tmp_record_frame(self.compare_before, img_time, frame_counter, "before", roi1_gray=gray)
@@ -1434,6 +1474,8 @@ class ComparePoints:
                 if peak_found and self.compare_after is None and after_target_frame is not None:
                     if frame_counter == after_target_frame:
                         self.compare_after = frame
+                        after_capture_perf = time.perf_counter()
+                        after_method = f"peak+{after_delay_frames}"
                         try:
                             self._stage_detail = "after_by_peak"
                         except Exception:
@@ -1442,6 +1484,15 @@ class ComparePoints:
                         self.after_name = self.convert_timestamp2str(after_time)
                         if self.logger:
                             self.logger.info(self.after_name + f", after img founded (peak+{after_delay_frames})")
+                        self._timeline(
+                            "after_captured",
+                            point_id=point_id,
+                            method=after_method,
+                            capture_ts=self.after_name,
+                            frame=frame_counter,
+                            session_elapsed_ms=(after_capture_perf - detect_t0) * 1000.0 if after_capture_perf is not None else None,
+                            before_after_ms=(after_capture_perf - before_capture_perf) * 1000.0 if (after_capture_perf is not None and before_capture_perf is not None) else None
+                        )
                         self._dbg(f"compare_after captured via peak: frame={frame_counter}, ts={self.after_name}")
                         self._tmp_record_frame(self.compare_after, after_time, frame_counter, "after_peak", roi1_gray=gray)
 
@@ -1496,6 +1547,8 @@ class ComparePoints:
                 stop_img, stop_time = self.get_screen_shot()
                 self.compare_after = np.array(stop_img)
                 self.after_name = self.convert_timestamp2str(stop_time)
+                after_capture_perf = time.perf_counter()
+                after_method = "stop_fallback_timeout" if timed_out else "stop_fallback"
                 try:
                     self._stage_detail = "after_by_stop_fallback"
                 except Exception:
@@ -1505,6 +1558,15 @@ class ComparePoints:
                         self.logger.warning(self.after_name + ", after img fallback to timeout screenshot (post-loop)")
                     else:
                         self.logger.info(self.after_name + ", after img fallback to stop-time screenshot (post-loop)")
+                self._timeline(
+                    "after_captured",
+                    point_id=point_id,
+                    method=after_method,
+                    capture_ts=self.after_name,
+                    frame=frame_counter + 1,
+                    session_elapsed_ms=(after_capture_perf - detect_t0) * 1000.0 if after_capture_perf is not None else None,
+                    before_after_ms=(after_capture_perf - before_capture_perf) * 1000.0 if (after_capture_perf is not None and before_capture_perf is not None) else None
+                )
                 self._dbg(f"compare_after fallback to stop-time screenshot: ts={self.after_name}")
                 roi1_gray = None
                 try:
@@ -1530,10 +1592,21 @@ class ComparePoints:
             after_img, after_t = self.get_screen_shot()
             self.compare_after = np.array(after_img)
             self.after_name = self.convert_timestamp2str(after_t)[:-1]
+            after_capture_perf = time.perf_counter()
+            after_method = "final_fallback"
             try:
                 self._stage_detail = "after_by_final_fallback"
             except Exception:
                 pass
+            self._timeline(
+                "after_captured",
+                point_id=point_id,
+                method=after_method,
+                capture_ts=self.after_name,
+                frame=frame_counter + 1,
+                session_elapsed_ms=(after_capture_perf - detect_t0) * 1000.0 if after_capture_perf is not None else None,
+                before_after_ms=(after_capture_perf - before_capture_perf) * 1000.0 if (after_capture_perf is not None and before_capture_perf is not None) else None
+            )
             self._dbg(f"compare_after final fallback screenshot: ts={self.after_name}")
             roi1_gray = None
             try:
@@ -1542,6 +1615,18 @@ class ComparePoints:
                 roi1_gray = None
             self._tmp_record_frame(self.compare_after, after_t, frame_counter + 1, "after_final", roi1_gray=roi1_gray)
             self._profile("after_final_fallback_done", t_final_fallback, f"after_name={self.after_name}")
+
+        stop_reason = "timeout" if timed_out else ("stop_signal" if (self._stop_event is not None and self._stop_event.is_set()) else "loop_exit")
+        self._timeline(
+            "session_summary",
+            point_id=point_id,
+            stop_reason=stop_reason,
+            after_method=after_method,
+            frames=frame_counter,
+            before_ts=self.before_name or None,
+            after_ts=self.after_name or None,
+            before_after_ms=(after_capture_perf - before_capture_perf) * 1000.0 if (after_capture_perf is not None and before_capture_perf is not None) else None
+        )
 
         # First-layer判定：ROI2(before) vs ROI2(after) 灰度均值差
         t_roi_eval = time.perf_counter()
