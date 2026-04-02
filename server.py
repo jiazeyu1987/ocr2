@@ -118,7 +118,7 @@ class ImageProcessServer:
         today = datetime.now().strftime("%Y-%m-%d")
         log_file = os.path.join(dst, f"ocrapp_{today}.log")
 
-        # �
+        # ?
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)  # 设置日志级别为DEBUG
 
@@ -366,7 +366,7 @@ class ImageProcessServer:
     def get_online(self):
         """截图识别"""
 
-        # OCR 在线线程与读线程并发，优�
+        # OCR 在线线程与读线程并发，优?
         if hasattr(self.ocrserver, "get_measures"):
             m = self.ocrserver.get_measures()
         else:
@@ -377,6 +377,7 @@ class ImageProcessServer:
             'A': m.get('A'),
             'B': m.get('B'),
             'Alpha': m.get('Alpha'),
+            'RecognizeStartTimestamp': m.get('RecognizeStartTimestamp'),
 
             'Depth': m.get('深度'),
             'IsFreeze': m.get('Is_Freeze'),

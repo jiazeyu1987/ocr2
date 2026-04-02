@@ -115,6 +115,7 @@ class OCRDetect:
 
                     'skin_distance': None, 'A': None, 'B': None, 'Alpha': None, 'Zoom_scaler': 1.0, 'Is_Freeze': False, 'Is_HIFU': False}
         self.MEASSURE['Points_Per_MM'] = None
+        self.MEASSURE['RecognizeStartTimestamp'] = None
         # 5-frame confirmation debounce for jitter-prone bools.
         self._debounce_bool_state = {
             "Is_Freeze": {"stable": False, "candidate": None, "count": 0},
@@ -447,6 +448,7 @@ class OCRDetect:
         # 目前只需要识别四个数值，保证实时性: skin deepth, A , B ,alpha
 
         # en ch
+        recognize_start_ts = int(time.time() * 1000)
 
         # 实际使用的时候，需要放开以下两行
         if img is None:
@@ -554,6 +556,7 @@ class OCRDetect:
         points_per_mm = self.cal_points_per_mm(deepth, zoom_scaler)
         if points_per_mm is not None:
             updates['Points_Per_MM'] = points_per_mm
+        updates['RecognizeStartTimestamp'] = recognize_start_ts
 
         with self._measure_lock:
             for k, v in updates.items():
