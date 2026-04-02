@@ -37,6 +37,7 @@ class ImageProcessServer:
 
             "Offline": "offline request",
             "Online": "online request",
+            "FreshOnline": "fresh online request",
             "OCR": "get OCR status",
             "CLOSEOCR": "close OCR loop",
             "OPENOCR": "open OCR loop",
@@ -364,39 +365,69 @@ class ImageProcessServer:
 
 
     def get_online(self):
-        """截图识别"""
+        """Return latest cached online OCR result."""
 
-        # OCR 在线线程与读线程并发，优�
+        # Read the latest thread-safe OCR snapshot cached by the background loop.
         if hasattr(self.ocrserver, "get_measures"):
             m = self.ocrserver.get_measures()
         else:
             m = self.ocrserver.MEASSURE
 
-        results = {
+        return self._build_online_results(m)
+
+    def _build_online_results(self, measures):
+        m = measures or {}
+        return {
             'SkinDepth': m.get('skin_distance'),
             'A': m.get('A'),
             'B': m.get('B'),
             'Alpha': m.get('Alpha'),
 
-            'Depth': m.get('深度'),
+            'Depth': m.get('\u6df1\u5ea6'),
             'IsFreeze': m.get('Is_Freeze'),
             'isHIFU': m.get('Is_HIFU', False),
             'Points_Per_MM': m.get('Points_Per_MM'),
         }
 
-        # # 用于不截图的测试
-        # results = {
-        #     'SkinDepth': 5,
-        #     'A': 4,
-        #     'B': 3,
-        #     'Alpha': 0,
-        #
-        #     'Depth': 6,
-        #     'IsFreeze': False,
-        #     'Points_Per_MM': 13,
-        # }
+    def get_fresh_online(self, arg=None):
+        arg_obj = {}
+        if arg is not None:
+            arg_obj = json.loads(arg)
+            if not isinstance(arg_obj, dict):
+                raise ValueError("FRESHONLINE payload must be a JSON object")
 
-        return results
+        default_sample_count = int((self.setting or {}).get("fresh_online_sample_count", 5))
+        default_sample_interval_ms = float((self.setting or {}).get("fresh_online_sample_interval_ms", 30))
+
+        sample_count = int(arg_obj.get("sample_count", default_sample_count))
+        if sample_count < 1 or sample_count > 20:
+            raise ValueError(f"invalid sample_count: {sample_count}")
+
+        sample_interval_ms = float(arg_obj.get("sample_interval_ms", default_sample_interval_ms))
+        if sample_interval_ms < 0 or sample_interval_ms > 5000:
+            raise ValueError(f"invalid sample_interval_ms: {sample_interval_ms}")
+
+        self.logger.info(
+            f"FRESHONLINE request: sample_count={sample_count}, sample_interval_ms={sample_interval_ms}"
+        )
+        measures = self.ocrserver.get_fresh_measures(
+            sample_count=sample_count,
+            sample_interval_seconds=sample_interval_ms / 1000.0
+        )
+        if measures is None:
+            return {
+                "success": False,
+                "info": "fresh_online_failed",
+                "sample_count": sample_count,
+            }
+
+        response = self._build_online_results(measures)
+        response["success"] = True
+        response["info"] = "fresh_online_ok"
+        response["sample_count"] = sample_count
+        response["sample_interval_ms"] = sample_interval_ms
+        self.logger.info(f"FRESHONLINE response: {response}")
+        return response
 
     def get_offline(self, arg):
 
@@ -785,7 +816,15 @@ class ImageProcessServer:
                             response = self.get_online()
                             self.logger.info(f"ONLINE response: {response}")
                         except Exception as e:
-                            self.logger.error("online返回错误:如下")
+                            self.logger.error("online response failed")
+                            self.logger.error(e)
+                            response = None
+                    elif req_type == 'FRESHONLINE':
+                        try:
+                            self.logger.info(req_type + (arg or ""))
+                            response = self.get_fresh_online(arg)
+                        except Exception as e:
+                            self.logger.error("freshonline response failed")
                             self.logger.error(e)
                             response = None
                     elif req_type == 'CLOSEOCR':

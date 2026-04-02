@@ -103,6 +103,7 @@ class OCRDetect:
 
         self._measure_lock = threading.Lock()
         self._health_lock = threading.Lock()
+        self._ocr_execution_lock = threading.RLock()
         now = time.time()
         self._last_capture_ok_ts = now
         self._last_ocr_ok_ts = now
@@ -443,7 +444,81 @@ class OCRDetect:
 
         return int(num + 0.5)
 
+    @staticmethod
+    def _measure_signature(measure):
+        return (
+            measure.get('skin_distance'),
+            measure.get('A'),
+            measure.get('B'),
+            measure.get('Alpha'),
+            measure.get('深度'),
+            measure.get('Is_Freeze'),
+            measure.get('Is_HIFU'),
+            measure.get('Points_Per_MM'),
+        )
+
+    def _select_measure_mode(self, measures):
+        if not measures:
+            return None
+
+        grouped_measures = {}
+        for index, measure in enumerate(measures):
+            signature = self._measure_signature(measure)
+            if signature not in grouped_measures:
+                grouped_measures[signature] = {
+                    "count": 0,
+                    "measure": dict(measure),
+                    "last_index": index,
+                }
+            grouped_measures[signature]["count"] += 1
+            grouped_measures[signature]["last_index"] = index
+            grouped_measures[signature]["measure"] = dict(measure)
+
+        sorted_groups = sorted(
+            grouped_measures.values(),
+            key=lambda item: (item["count"], item["last_index"]),
+            reverse=True
+        )
+        top_group = sorted_groups[0]
+        top_count = top_group["count"]
+        tied_group_count = sum(1 for item in sorted_groups if item["count"] == top_count)
+        self.logger.info(
+            f"fresh online aggregation: sample_count={len(measures)}, top_count={top_count}, "
+            f"tied_group_count={tied_group_count}, selected_last_index={top_group['last_index']}, "
+            f"selected_measure={top_group['measure']}"
+        )
+        return dict(top_group["measure"])
+
+    def get_fresh_measures(self, sample_count=5, sample_interval_seconds=None):
+        sample_count = int(sample_count)
+        if sample_count < 1:
+            raise ValueError(f"sample_count must be >= 1, got {sample_count}")
+
+        if sample_interval_seconds is None:
+            sample_interval_seconds = float(self.min_loop_sleep_seconds)
+        sample_interval_seconds = float(sample_interval_seconds)
+        if sample_interval_seconds < 0:
+            raise ValueError(f"sample_interval_seconds must be >= 0, got {sample_interval_seconds}")
+
+        samples = []
+        with self._ocr_execution_lock:
+            for sample_index in range(sample_count):
+                snapshot = self._ocr_instant_locked()
+                if snapshot is None:
+                    self.logger.error(
+                        f"fresh online sample failed: sample_index={sample_index + 1}/{sample_count}"
+                    )
+                    return None
+                samples.append(snapshot)
+                if sample_index + 1 < sample_count and sample_interval_seconds > 0:
+                    time.sleep(sample_interval_seconds)
+        return self._select_measure_mode(samples)
+
     def ocr_instant(self, img=None):
+        with self._ocr_execution_lock:
+            return self._ocr_instant_locked(img)
+
+    def _ocr_instant_locked(self, img=None):
         # 目前只需要识别四个数值，保证实时性: skin deepth, A , B ,alpha
 
         # en ch
@@ -463,7 +538,7 @@ class OCRDetect:
             with self._health_lock:
                 self._consecutive_failures += 1
                 self._last_error = "screenshot returned empty image"
-            return
+            return None
 
         h, w = img.shape[:2]
         if h < 100 or w < 100:
@@ -471,7 +546,7 @@ class OCRDetect:
             with self._health_lock:
                 self._consecutive_failures += 1
                 self._last_error = f"screenshot too small: shape={img.shape}"
-            return
+            return None
 
         with self._health_lock:
             self._last_capture_ok_ts = time.time()
@@ -517,7 +592,7 @@ class OCRDetect:
             with self._health_lock:
                 self._consecutive_failures += 1
                 self._last_error = "PaddleOCR.ocr failed"
-            return
+            return None
 
         with self._health_lock:
             self._last_ocr_ok_ts = time.time()
@@ -561,6 +636,8 @@ class OCRDetect:
 
         with self._health_lock:
             self._last_loop_ok_ts = time.time()
+
+        return self.get_measures()
 
         # time_in = time.time() - time_in
         # print(time_in)
