@@ -102,6 +102,7 @@ class OCRDetect:
         )
 
         self._measure_lock = threading.Lock()
+        self._measure_condition = threading.Condition(self._measure_lock)
         self._health_lock = threading.Lock()
         now = time.time()
         self._last_capture_ok_ts = now
@@ -115,7 +116,9 @@ class OCRDetect:
 
                     'skin_distance': None, 'A': None, 'B': None, 'Alpha': None, 'Zoom_scaler': 1.0, 'Is_Freeze': False, 'Is_HIFU': False}
         self.MEASSURE['Points_Per_MM'] = None
+        self.MEASSURE['CaptureTimestamp'] = None
         self.MEASSURE['RecognizeStartTimestamp'] = None
+        self._capture_seq = 0
         self._recognize_seq = 0
         self._last_recognize_start_ts = None
         self._last_recognize_end_ts = None
@@ -463,6 +466,16 @@ class OCRDetect:
                     img = pyautogui.screenshot(allScreens=False, region=(x1, y1, x2 - x1, y2 - y1))
             img = np.array(img)
 
+        capture_ts_ms = int(time.time() * 1000)
+        self._capture_seq += 1
+        capture_seq = self._capture_seq
+        self.logger.info(
+            f"[OCR-CAPTURE] seq={capture_seq}, "
+            f"capture_ts_ms={capture_ts_ms}, "
+            f"recognize_start_ts_ms={recognize_start_ts}, "
+            f"img_shape={getattr(img, 'shape', None)}"
+        )
+
         if img is None or getattr(img, "shape", None) is None:
             self.logger.warning("OCR screenshot returned empty image.")
             with self._health_lock:
@@ -479,7 +492,7 @@ class OCRDetect:
             return
 
         with self._health_lock:
-            self._last_capture_ok_ts = time.time()
+            self._last_capture_ok_ts = float(capture_ts_ms) / 1000.0
 
         # showimg(img)
 
@@ -559,11 +572,13 @@ class OCRDetect:
         points_per_mm = self.cal_points_per_mm(deepth, zoom_scaler)
         if points_per_mm is not None:
             updates['Points_Per_MM'] = points_per_mm
+        updates['CaptureTimestamp'] = capture_ts_ms
         updates['RecognizeStartTimestamp'] = recognize_start_ts
 
-        with self._measure_lock:
+        with self._measure_condition:
             for k, v in updates.items():
                 self.MEASSURE[k] = v
+            self._measure_condition.notify_all()
 
         with self._health_lock:
             self._last_loop_ok_ts = time.time()
@@ -604,6 +619,70 @@ class OCRDetect:
             f"interval_since_prev_end_ms={interval_since_prev_end_ms}, "
             f"recognize_duration_ms={recognize_duration_ms}"
         )
+
+    @staticmethod
+    def _coerce_timestamp_ms(value):
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except Exception:
+            try:
+                return int(float(value))
+            except Exception:
+                return None
+
+    def _build_wait_result(self, action, measures, wait_started_ts, fallback=None):
+        capture_ts_ms = self._coerce_timestamp_ms((measures or {}).get('CaptureTimestamp'))
+        recognize_start_ts_ms = self._coerce_timestamp_ms((measures or {}).get('RecognizeStartTimestamp'))
+        return {
+            "action": action,
+            "wait_elapsed_ms": int((time.perf_counter() - wait_started_ts) * 1000.0),
+            "had_cache": capture_ts_ms is not None,
+            "capture_ts_ms": capture_ts_ms,
+            "recognize_start_ts_ms": recognize_start_ts_ms,
+            "fallback": fallback,
+        }
+
+    def get_measures_after_capture_ts(self, min_capture_ts_ms, wait_timeout_ms):
+        min_capture_ts_ms = self._coerce_timestamp_ms(min_capture_ts_ms)
+        if min_capture_ts_ms is None:
+            raise ValueError("min_capture_ts_ms is required")
+
+        wait_timeout_ms = max(0, int(wait_timeout_ms))
+        wait_started_ts = time.perf_counter()
+
+        with self._measure_condition:
+            measures = dict(self.MEASSURE)
+            capture_ts_ms = self._coerce_timestamp_ms(measures.get('CaptureTimestamp'))
+            if capture_ts_ms is not None and capture_ts_ms > min_capture_ts_ms:
+                return measures, self._build_wait_result(
+                    action="immediate_return",
+                    measures=measures,
+                    wait_started_ts=wait_started_ts
+                )
+
+            deadline_ts = time.perf_counter() + (float(wait_timeout_ms) / 1000.0)
+            while True:
+                remaining_seconds = deadline_ts - time.perf_counter()
+                if remaining_seconds <= 0:
+                    measures = dict(self.MEASSURE)
+                    return measures, self._build_wait_result(
+                        action="wait_timeout_return_cached",
+                        measures=measures,
+                        wait_started_ts=wait_started_ts,
+                        fallback="timeout_return_cached"
+                    )
+
+                self._measure_condition.wait(timeout=remaining_seconds)
+                measures = dict(self.MEASSURE)
+                capture_ts_ms = self._coerce_timestamp_ms(measures.get('CaptureTimestamp'))
+                if capture_ts_ms is not None and capture_ts_ms > min_capture_ts_ms:
+                    return measures, self._build_wait_result(
+                        action="wait_return_new_frame",
+                        measures=measures,
+                        wait_started_ts=wait_started_ts
+                    )
 
 
     def start_ocr_server(self):

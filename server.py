@@ -71,6 +71,9 @@ class ImageProcessServer:
             self._max_client_connections = int((self.setting or {}).get("max_client_connections", 64))
         except Exception:
             self._max_client_connections = 64
+        self._online_wait_timeout_ms = 2500
+        self._online_req_lock = threading.Lock()
+        self._online_req_seq = 0
 
         self.logger.info(
             f"offline history guard enabled: max_points={self._offline_history_max_points}, ttl_s={self._offline_history_ttl_seconds}"
@@ -363,41 +366,37 @@ class ImageProcessServer:
             return False
 
 
-    def get_online(self):
-        """截图识别"""
+    def _next_online_request_seq(self):
+        with self._online_req_lock:
+            self._online_req_seq += 1
+            return self._online_req_seq
 
-        # OCR 在线线程与读线程并发，优?
-        if hasattr(self.ocrserver, "get_measures"):
-            m = self.ocrserver.get_measures()
-        else:
-            m = self.ocrserver.MEASSURE
-
-        results = {
+    @staticmethod
+    def _build_online_results(measures):
+        m = measures or {}
+        return {
             'SkinDepth': m.get('skin_distance'),
             'A': m.get('A'),
             'B': m.get('B'),
             'Alpha': m.get('Alpha'),
+            'CaptureTimestamp': m.get('CaptureTimestamp'),
             'RecognizeStartTimestamp': m.get('RecognizeStartTimestamp'),
-
-            'Depth': m.get('深度'),
+            'Depth': m.get(r'\u6df1\u5ea6'.encode('ascii').decode('unicode_escape')),
             'IsFreeze': m.get('Is_Freeze'),
             'isHIFU': m.get('Is_HIFU', False),
             'Points_Per_MM': m.get('Points_Per_MM'),
         }
 
-        # # 用于不截图的测试
-        # results = {
-        #     'SkinDepth': 5,
-        #     'A': 4,
-        #     'B': 3,
-        #     'Alpha': 0,
-        #
-        #     'Depth': 6,
-        #     'IsFreeze': False,
-        #     'Points_Per_MM': 13,
-        # }
+    def get_online(self, online_request_ts_ms):
+        """Read OCR cache for ONLINE."""
 
-        return results
+        measures, wait_result = self.ocrserver.get_measures_after_capture_ts(
+            min_capture_ts_ms=online_request_ts_ms,
+            wait_timeout_ms=self._online_wait_timeout_ms
+        )
+        results = self._build_online_results(measures)
+
+        return results, wait_result
 
     def get_offline(self, arg):
 
@@ -782,11 +781,31 @@ class ImageProcessServer:
                             response = None
                     elif req_type == 'ONLINE':
                         try:
+                            online_seq = self._next_online_request_seq()
+                            online_request_ts_ms = int(time.time() * 1000)
+                            cached_measures = self.ocrserver.get_measures()
                             self.logger.info(req_type)
-                            response = self.get_online()
+                            self.logger.info(
+                                f"[ONLINE-WAIT] seq={online_seq}, "
+                                f"request_ts_ms={online_request_ts_ms}, "
+                                f"cached_capture_ts_ms={cached_measures.get('CaptureTimestamp')}, "
+                                f"cached_recognize_start_ts_ms={cached_measures.get('RecognizeStartTimestamp')}, "
+                                f"action=request_received"
+                            )
+                            response, wait_result = self.get_online(online_request_ts_ms=online_request_ts_ms)
+                            self.logger.info(
+                                f"[ONLINE-WAIT] seq={online_seq}, "
+                                f"request_ts_ms={online_request_ts_ms}, "
+                                f"cached_capture_ts_ms={wait_result.get('capture_ts_ms')}, "
+                                f"cached_recognize_start_ts_ms={wait_result.get('recognize_start_ts_ms')}, "
+                                f"action={wait_result.get('action')}, "
+                                f"wait_elapsed_ms={wait_result.get('wait_elapsed_ms')}, "
+                                f"had_cache={wait_result.get('had_cache')}, "
+                                f"fallback={wait_result.get('fallback')}"
+                            )
                             self.logger.info(f"ONLINE response: {response}")
                         except Exception as e:
-                            self.logger.error("online返回错误:如下")
+                            self.logger.error("online error:")
                             self.logger.error(e)
                             response = None
                     elif req_type == 'CLOSEOCR':
