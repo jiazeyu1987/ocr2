@@ -116,6 +116,9 @@ class OCRDetect:
                     'skin_distance': None, 'A': None, 'B': None, 'Alpha': None, 'Zoom_scaler': 1.0, 'Is_Freeze': False, 'Is_HIFU': False}
         self.MEASSURE['Points_Per_MM'] = None
         self.MEASSURE['RecognizeStartTimestamp'] = None
+        self._recognize_seq = 0
+        self._last_recognize_start_ts = None
+        self._last_recognize_end_ts = None
         # 5-frame confirmation debounce for jitter-prone bools.
         self._debounce_bool_state = {
             "Is_Freeze": {"stable": False, "candidate": None, "count": 0},
@@ -565,8 +568,42 @@ class OCRDetect:
         with self._health_lock:
             self._last_loop_ok_ts = time.time()
 
+        self._log_recognize_interval(
+            recognize_start_ts=recognize_start_ts,
+            recognize_end_ts=int(self._last_loop_ok_ts * 1000)
+        )
+
         # time_in = time.time() - time_in
         # print(time_in)
+
+    def _log_recognize_interval(self, recognize_start_ts, recognize_end_ts):
+        self._recognize_seq += 1
+        previous_start_ts = self._last_recognize_start_ts
+        previous_end_ts = self._last_recognize_end_ts
+
+        interval_since_prev_start_ms = None
+        if previous_start_ts is not None:
+            interval_since_prev_start_ms = int(recognize_start_ts) - int(previous_start_ts)
+
+        interval_since_prev_end_ms = None
+        if previous_end_ts is not None:
+            interval_since_prev_end_ms = int(recognize_start_ts) - int(previous_end_ts)
+
+        recognize_duration_ms = int(recognize_end_ts) - int(recognize_start_ts)
+        if recognize_duration_ms < 0:
+            recognize_duration_ms = 0
+
+        self._last_recognize_start_ts = int(recognize_start_ts)
+        self._last_recognize_end_ts = int(recognize_end_ts)
+
+        self.logger.info(
+            f"[OCR-INTERVAL] seq={self._recognize_seq}, "
+            f"recognize_start_ts={self._last_recognize_start_ts}, "
+            f"recognize_end_ts={self._last_recognize_end_ts}, "
+            f"interval_since_prev_start_ms={interval_since_prev_start_ms}, "
+            f"interval_since_prev_end_ms={interval_since_prev_end_ms}, "
+            f"recognize_duration_ms={recognize_duration_ms}"
+        )
 
 
     def start_ocr_server(self):
