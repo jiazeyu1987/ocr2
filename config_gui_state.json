@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "widget_values": {
+    "basic_vars": {
+      "processing_mode": "screen",
+      "data_processing.save_roi1": true,
+      "data_processing.save_roi2": true,
+      "data_processing.save_wave": true,
+      "data_processing.only_delect": false
+    },
+    "roi_vars": {
+      "roi_capture.default_config.x1": "1280",
+      "roi_capture.default_config.y1": "80",
+      "roi_capture.default_config.x2": "1920",
+      "roi_capture.default_config.y2": "980",
+      "roi_capture.roi2_config.extension_params.left": "40",
+      "roi_capture.roi2_config.extension_params.right": "40",
+      "roi_capture.roi2_config.extension_params.top": "50",
+      "roi_capture.roi2_config.extension_params.bottom": "30",
+      "roi_capture.roi3_config.extension_params.left": "30",
+      "roi_capture.roi3_config.extension_params.right": "30",
+      "roi_capture.roi3_config.extension_params.top": "50",
+      "roi_capture.roi3_config.extension_params.bottom": "100",
+      "roi_capture.frame_rate": "20",
+      "roi3_config.save_roi3": false
+    },
+    "peak_vars": {
+      "peak_detection.threshold": "40.0",
+      "peak_detection.adaptive_threshold_enabled": true,
+      "peak_detection.threshold_over_mean_ratio": "0.08",
+      "peak_detection.difference_threshold": "1.8",
+      "peak_detection.margin_frames": "2",
+      "peak_detection.silence_frames": "0",
+      "peak_detection.min_region_length": "1",
+      "peak_detection.pre_post_avg_frames": "2",
+      "peak_detection.adaptive_window_seconds": "1.5"
+    },
+    "roi3_override_vars": {
+      "peak_detection.roi3_override.enabled": false,
+      "peak_detection.roi3_override.threshold": "",
+      "peak_detection.roi3_override.require_roi3_data": false
+    },
+    "ui_runtime_vars": {
+      "threshold_lower": 140,
+      "threshold_upper": 255,
+      "roi2_stats_threshold": "140",
+      "roi3_scan_threshold": "100",
+      "roi2_neighbor_show_full_image": true,
+      "roi2_hem_avg_delta": "0",
+      "roi2_hem_pixel_delta": "0",
+      "continuous_check_enabled": false,
+      "overlay_enabled": true,
+      "overlay_alpha": 0.5,
+      "continuous_heatmap_enabled": false,
+      "heatmap_alpha": 0.6
+    }
+  },
+  "selected_tab_index": 4
+}

@@ -1,0 +1,267 @@
+{
+  "_comment": "SimpleFEM 配置文件：此 JSON 不支持真正的注释，所以用 _comment 字段说明配置含义；程序会忽略未知字段。",
+  "processing_mode": "screen",
+  "logging": {
+    "_comment": "Master logging switch. When enabled=false, console output and all log files are suppressed.",
+    "enabled": true
+  },
+  "data_processing": {
+    "_comment": "数据保存/日志策略（only_delect=true 表示只有检测到波峰才保存/记录）。",
+    "save_roi1": true,
+    "save_roi2": true,
+    "save_roi3": true,
+    "save_wave": true,
+    "save_roi1_wave": true,
+    "only_delect": false
+  },
+  "analysis_cache": {
+    "_comment": "Save per-frame analysis cache (JSONL) to export/ for later debugging.",
+    "enabled": true,
+    "flush_every": 50
+  },
+  "video_processing": {
+    "_comment": "processing_mode=video 时生效：从本地视频文件夹依次读取所有视频文件作为输入。video_path可以是单个视频文件或视频文件夹路径。",
+    "video_path": "video",
+    "loop_enabled": false,
+    "processing_frame_rate": ""
+  },
+  "roi_capture": {
+    "_comment": "ROI1/ROI2 截图参数：ROI1 是大区域，ROI2 是围绕绿色交点的局部区域。",
+    "frame_rate": 20,
+    "default_config": {
+      "_comment": "ROI1 在屏幕/视频帧中的矩形坐标（x1,y1 左上；x2,y2 右下）。",
+      "x1": 1280,
+      "y1": 80,
+      "x2": 1920,
+      "y2": 980
+    },
+    "roi2_config": {
+      "_comment": "ROI2 从 ROI1 中裁剪：以绿色交点为中心，按 extension_params 扩展得到 ROI2。",
+      "extension_params": {
+        "_comment": "ROI2 扩展像素：left/right/top/bottom 表示相对交点向四个方向扩展的像素数。",
+        "left": 40,
+        "right": 40,
+        "top": 50,
+        "bottom": 30
+      }
+    },
+    "roi3_config": {
+      "_comment": "ROI3 从 ROI1 中裁剪：以绿色交点为中心，按 extension_params 扩展得到 ROI3。",
+      "extension_params": {
+        "_comment": "ROI3 扩展像素：left/right/top/bottom 表示相对交点向四个方向扩展的像素数。",
+        "left": 30,
+        "right": 30,
+        "top": 50,
+        "bottom": 100
+      }
+    },
+    "save_roi3": false
+  },
+  "peak_detection": {
+    "_comment": "波峰检测：先用阈值识别连续高位区间（波峰），再用 pre/post 均值差判定绿/红；支持自适应阈值（基于背景均值）。",
+    "threshold": 40.0,
+    "_comment_threshold": "固定阈值：自适应阈值未启用或历史样本不足时，使用该阈值判为高位。",
+    "threshold_minimum": 40.0,
+    "threshold_over_mean_ratio": 0.08,
+    "_comment_threshold_over_mean_ratio": "自适应阈值上浮比例：0.1 表示比最近N秒平均值高 10%。",
+    "_comment_threshold_minimum": "阈值下限：自适应阈值计算结果不会低于此值，确保检测灵敏度。",
+    "margin_frames": 2,
+    "_comment_margin_frames": "峰间最小间隔：两个波峰间隔小于该值时只保留峰值更高的那个。",
+    "silence_frames": 0,
+    "_comment_silence_frames": "干净区间长度 X：波峰升上阈值前 X 帧、降回阈值后 X 帧都必须 < 阈值，否则不算波峰（会增加确认延迟）。",
+    "pre_post_avg_frames": 2,
+    "_comment_pre_post_avg_frames": "用于计算 pre_peak_avg/post_peak_avg 的窗口帧数 N（绿/红判定也基于同一个 N）。",
+    "adaptive_threshold_enabled": true,
+    "_comment_adaptive_threshold_enabled": "启用自适应阈值：阈值=最近N秒平均值*(1+threshold_over_mean_ratio)",
+    "adaptive_window_seconds": 1.5,
+    "_comment_adaptive_window_seconds": "自适应阈值计算的时间窗口（秒），会根据帧率自动转换为帧数。",
+    "history_mean_min_samples": 30,
+    "_comment_history_mean_min_samples": "自适应阈值计算使用的最少帧数（已弃用，改用adaptive_window_seconds）。",
+    "threshold_protection": {
+      "_comment": "阈值保护机制：防止波峰污染自适应阈值计算",
+      "enabled": true,
+      "_comment_enabled": "是否启用阈值保护机制",
+      "recovery_delay_seconds": 1.0,
+      "_comment_recovery_delay_seconds": "波峰结束后恢复阈值计算的延迟时间（秒）",
+      "stability_frames": 2,
+      "_comment_stability_frames": "恢复阈值计算前需要连续低于阈值的帧数",
+      "waveform_trigger_enabled": false,
+      "_comment_waveform_trigger_enabled": "是否在波形达到阈值时立即触发保护（不等待波峰检测结果）"
+    },
+    "difference_threshold": 1.8,
+    "_comment_difference_threshold": "绿/红判定阈值 X：若 (post_peak_avg - pre_peak_avg) >= X 判为绿色，否则判为红色。",
+    "min_region_length": 1,
+    "_comment_min_region_length": "最小波峰宽度：波峰区间长度小于该值会被过滤（单位：帧）。",
+    "use_improved_algorithm": false,
+    "_comment_use_improved_algorithm": "是否启用外部 improved_peak_detection 模块（如果存在）；当前默认走内置阈值+规则版本。",
+    "g1_g2_override": {
+      "_comment": "G1/G2 覆盖判定：当G1和G2同时超过阈值时，强制将红色波峰改为绿色",
+      "enabled": true,
+      "_comment_enabled": "是否启用G1/G2覆盖逻辑",
+      "g1_threshold": 98.0,
+      "_comment_g1_threshold": "G1阈值（百分比）：像素在[80,255]区间的占比需大于此值",
+      "g2_threshold": 20.0,
+      "_comment_g2_threshold": "G2阈值（百分比）：像素在[150,255]区间的占比需大于此值",
+      "use_peak_max": true,
+      "_comment_use_peak_max": "是否使用波峰区间内的最大G1/G2值（否则使用波峰结束帧的值）"
+    },
+    "roi3_column_diff_override": {
+      "_comment": "ROI3列灰度差值覆盖判定：当列灰度差值大于阈值时，强制将红色波峰改为绿色",
+      "enabled": true,
+      "_comment_enabled": "是否启用ROI3列灰度差值覆盖逻辑",
+      "threshold": 15.0,
+      "_comment_threshold": "列灰度差值阈值：差值大于此值时触发覆盖（默认15）",
+      "use_peak_max": true,
+      "_comment_use_peak_max": "是否使用波峰区间内的最大差值（否则使用波峰结束帧的值）"
+    },
+    "preprocessing": {
+      "_comment": "预处理参数（目前主流程未使用，预留）。",
+      "noise_reduction_factor": 0.8,
+      "baseline_correction": true,
+      "smoothing_window": 5
+    },
+    "detection": {
+      "_comment": "形态/宽度类检测参数（目前主流程未使用，预留）。",
+      "min_peak_width": 1,
+      "max_peak_width": 20,
+      "min_peak_distance": 10,
+      "prominence_factor": 0.1
+    },
+    "classification": {
+      "_comment": "更复杂的分类/稳定性参数（目前主流程未使用，预留）。",
+      "stability_window": 5,
+      "error_tolerance": 0.15,
+      "min_green_prominence": 0.3,
+      "red_detection_variance": 0.4,
+      "roi3_override_enabled": false,
+      "_comment_roi3_override_enabled": "已弃用：被g1_g2_override替代"
+    },
+    "tracking": {
+      "_comment": "生命周期追踪参数（目前主流程未使用，预留）。",
+      "enable_lifecycle_tracking": true,
+      "peak_matching_threshold": 0.8,
+      "max_tracking_age": 15
+    },
+    "roi3_override": {
+      "enabled": false,
+      "threshold": "",
+      "require_roi3_data": false
+    }
+  },
+  "roi1_peak_detection": {
+    "_comment": "ROI1波峰检测：独立于ROI2的波形分析系统，基于ROI1整个区域的平均灰度值。",
+    "enabled": true,
+    "_comment_enabled": "是否启用ROI1波峰检测功能",
+    "threshold": 40.0,
+    "_comment_threshold": "ROI1固定阈值：考虑到ROI1区域更大、更复杂，通常设置比ROI2更高",
+    "threshold_minimum": 40.0,
+    "_comment_threshold_minimum": "ROI1阈值下限：确保在低对比度情况下仍能检测",
+    "threshold_over_mean_ratio": 0.08,
+    "_comment_threshold_over_mean_ratio": "ROI1自适应阈值上浮比例：较小比例，因为ROI1变化通常更稳定",
+    "margin_frames": 2,
+    "_comment_margin_frames": "ROI1峰间最小间隔：防止过度敏感的波峰检测",
+    "silence_frames": 0,
+    "_comment_silence_frames": "ROI1干净区间长度要求",
+    "pre_post_avg_frames": 5,
+    "_comment_pre_post_avg_frames": "ROI1绿/红判定窗口帧数",
+    "adaptive_threshold_enabled": true,
+    "_comment_adaptive_threshold_enabled": "ROI1启用自适应阈值",
+    "adaptive_window_seconds": 1.5,
+    "_comment_adaptive_window_seconds": "ROI1自适应阈值计算时间窗口",
+    "threshold_protection": {
+      "_comment": "ROI1阈值保护机制：防止ROI1波峰污染背景均值计算",
+      "enabled": true,
+      "_comment_enabled": "是否启用ROI1阈值保护机制",
+      "recovery_delay_seconds": 1.0,
+      "_comment_recovery_delay_seconds": "ROI1波峰结束后恢复阈值计算的延迟时间",
+      "stability_frames": 5,
+      "_comment_stability_frames": "ROI1恢复阈值计算前需要的稳定帧数",
+      "waveform_trigger_enabled": false,
+      "_comment_waveform_trigger_enabled": "ROI1是否在波形达到阈值时立即触发保护"
+    },
+    "difference_threshold": 2.0,
+    "_comment_difference_threshold": "ROI1绿/红判定阈值：通常ROI1需要更高的阈值来确保检测质量",
+    "min_region_length": 1,
+    "_comment_min_region_length": "ROI1最小波峰宽度",
+    "use_improved_algorithm": false,
+    "_comment_use_improved_algorithm": "ROI1是否使用改进的波峰检测算法"
+  },
+  "startup_cleanup": {
+    "_comment": "程序启动时的清理功能配置：控制是否自动删除历史数据文件夹。",
+    "enabled": true,
+    "_comment_enabled": "是否启用启动时清理功能：true表示启动时自动删除指定文件夹内容。",
+    "cleanup_export": true,
+    "_comment_cleanup_export": "是否清理export文件夹：删除CSV统计数据文件。",
+    "cleanup_tmp": true,
+    "_comment_cleanup_tmp": "是否清理tmp文件夹：删除临时文件。",
+    "cleanup_logs": true,
+    "_comment_cleanup_logs": "是否清理logs文件夹：删除日志文件。",
+    "directories_to_clean": [
+      "export",
+      "tmp",
+      "logs"
+    ],
+    "_comment_directories_to_clean": "自定义清理目录列表：可修改要清理的文件夹名称。"
+  },
+  "deduplication": {
+    "_comment": "统计导出去重参数（safe_peak_statistics.py 使用）：避免短时间内重复记录相似波峰。",
+    "consecutive_frame_window": 40,
+    "_comment_consecutive_frame_window": "连续去重窗口：20帧内相同峰值的波峰只保留优先级最高的一个。",
+    "consecutive_deduplication_enabled": false,
+    "cross_color_deduplication_enabled": false,
+    "_comment_cross_color_deduplication_enabled": "跨颜色去重：相同峰值的波峰无论颜色都只保留优先级更高的一个。",
+    "color_priority": {
+      "green": 2,
+      "red": 1,
+      "_comment": "颜色优先级：数值越大优先级越高。当相同时刻有相同峰值的波峰时，保留优先级高的。"
+    }
+  },
+  "hybrid_detection": {
+    "_comment": "混合检测配置：ROI1检测波峰，ROI2判定颜色",
+    "enabled": true,
+    "detection_strategy": "roi1_peaks_roi2_color",
+    "_comment_detection_strategy": "检测策略：roi1_peaks_roi2_color (ROI1波峰+ROI2颜色)",
+    "fusion_strategy": "roi2_priority",
+    "_comment_fusion_strategy": "融合策略：roi2_priority (优先ROI2颜色判定)",
+    "roi2_color_frames": {
+      "_comment": "ROI2颜色判定使用的前后帧窗口",
+      "pre_peak": 5,
+      "_comment_pre_peak": "ROI2波峰前取平均值的帧数",
+      "post_peak": 10,
+      "_comment_post_peak": "ROI2波峰后取平均值的帧数"
+    },
+    "roi1_peak_width_range": [
+      1,
+      100
+    ],
+    "_comment_roi1_peak_width_range": "ROI1波峰宽度范围(帧数) [最小, 最大]",
+    "data_quality": {
+      "_comment": "数据质量检查参数",
+      "minimum_roi2_frames": 15,
+      "_comment_minimum_roi2_frames": "ROI2最少有效帧数要求",
+      "roi2_minimum_variance": 0.0,
+      "_comment_roi2_minimum_variance": "ROI2数据最小方差要求"
+    },
+    "fallback_enabled": true,
+    "_comment_fallback_enabled": "是否启用ROI2数据不足时的回退机制"
+  },
+  "roi2_anti_jitter": {
+    "_comment": "ROI2防抖动机制参数配置 - 阈值式防抖动",
+    "enabled": true,
+    "algorithm": "threshold",
+    "_comment_algorithm": "滤波算法: 'ema'(平滑) 或 'threshold'(阈值式，小于阈值完全不动)",
+    "movement_threshold": 20.0,
+    "_comment_movement_threshold": "阈值式防抖动阈值(像素)。小于此值ROI2完全不动，超过此值才更新位置",
+    "initialization_frames": 3,
+    "_comment_initialization_frames": "初始化帧数。前N帧收集初始稳定位置",
+    "ema": {
+      "alpha": 0.25,
+      "_comment_alpha": "EMA平滑因子(仅在algorithm='ema'时使用)"
+    },
+    "stability_threshold": 8.0,
+    "_comment_stability_threshold": "稳定阈值(仅在algorithm='ema'时使用)"
+  },
+  "roi3_config": {
+    "save_roi3": false
+  }
+}
