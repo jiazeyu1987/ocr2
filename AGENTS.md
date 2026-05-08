@@ -1,0 +1,1 @@
+- Thread baseline: 外部调用 OCR 服务的上位机程序位于 D:\ProjectPackage\Vein\sqw\Vein

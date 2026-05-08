@@ -559,7 +559,7 @@ class OCRDetect:
         # 2025年6月17日byYoung;需要知道是否在进行段落的测量
 
 
-        updates = {}
+        updates = {'skin_distance': None}
 
         # 如果在段落测量，就更新AB和Alpha的值
         try:

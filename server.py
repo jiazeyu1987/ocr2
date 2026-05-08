@@ -1,4 +1,4 @@
-# -*- coding: latin-1 -*-
+# -*- coding: utf-8 -*-
 import os
 
 # Work around OpenMP runtime conflicts on Windows (common with MKL + Paddle/OpenCV).
@@ -22,9 +22,9 @@ class ImageProcessServer:
     def __init__(self):
 
         # logging.basicConfig(
-        #     level=logging.INFO,  # 设置日志级别�?INFO，这意味着 INFO 及以上级别的日志会被记录
+        #     level=logging.INFO,  # 设置日志级别为 INFO，这意味着 INFO 及以上级别的日志会被记录
         #     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',  # 设置日志格式
-        #     filename='ocrserver.log',  # 指定日志输出文件，如果不指定则默认输出到控制�?
+        #     filename='ocrserver.log',  # 指定日志输出文件，如果不指定则默认输出到控制台
         #     filemode="a"
         # )
 
@@ -32,7 +32,7 @@ class ImageProcessServer:
         self.init_logger()
 
 
-        # 定义支持的请求类�?
+        # 定义支持的请求类型
         self.REQUEST_TYPES = {
 
             "Offline": "offline request",
@@ -105,7 +105,7 @@ class ImageProcessServer:
         self._offline_session = None  # dict(point_id, thread, stop_event, tool)
         self._offline_orphans = []
         self.compareTool = None
-        # 为了首次调用服务器时不延迟，此处默认调用一�?
+        # 为了首次调用服务器时不延迟，此处默认调用一次
         # default_offline = {"point_id": 3141592653, "is_save": False, "time_out": 100}
         # self.get_offline(json.dumps(default_offline))
         # time.sleep(1)
@@ -113,27 +113,27 @@ class ImageProcessServer:
 
 
     def init_logger(self, dst='ocrlog'):
-        # 如果没有指定日志文件，则使用当前日期作为文件�?
+        # 如果没有指定日志文件，则使用当前日期作为文件名
         if not os.path.exists(dst):
             os.makedirs(dst)
         today = datetime.now().strftime("%Y-%m-%d")
         log_file = os.path.join(dst, f"ocrapp_{today}.log")
 
-        # �
+        # 日志配置
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)  # 设置日志级别为DEBUG
 
-        # 创建文件处理�?
+        # 创建文件处理器
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
 
-        # 创建格式化器并添加到处理�?
+        # 创建格式化器并添加到处理器
         formatter = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
         file_handler.setFormatter(formatter)
 
-        # 添加处理器到日志�?
+        # 添加处理器到日志器
         if not self.logger.handlers:
             self.logger.addHandler(file_handler)
 
@@ -373,12 +373,20 @@ class ImageProcessServer:
         else:
             m = self.ocrserver.MEASSURE
 
-        return self._build_online_results(m)
+        ocr_failed = False
+        if hasattr(self.ocrserver, "get_health"):
+            h = self.ocrserver.get_health()
+            ocr_failed = int(h.get("consecutive_failures", 0) or 0) > 0
 
-    def _build_online_results(self, measures):
+        return self._build_online_results(m, skin_depth_failed=ocr_failed)
+
+    def _build_online_results(self, measures, skin_depth_failed=False):
         m = measures or {}
+        skin_depth = m.get('skin_distance')
+        if skin_depth_failed or skin_depth is None:
+            skin_depth = "-1"
         return {
-            'SkinDepth': m.get('skin_distance'),
+            'SkinDepth': skin_depth,
             'A': m.get('A'),
             'B': m.get('B'),
             'Alpha': m.get('Alpha'),
@@ -874,7 +882,7 @@ class ImageProcessServer:
 
 
         except Exception as e:
-            self.logger.error(f"处理客户�?{client_address} 时发生错�? {e}")
+            self.logger.error(f"处理客户端 {client_address} 时发生错误: {e}")
         finally:
             try:
                 client_socket.close()
@@ -892,25 +900,25 @@ class ImageProcessServer:
 
     def start_server(self, host='localhost', port=12345):
         """Start TCP server."""
-        # 创建TCP套接�?
+        # 创建 TCP 套接字
         # self.logger.info(f"start server: host={host}, port={port}")
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
-            # 设置套接字选项，�
+            # 设置套接字选项
             server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-            # 绑定地址和端�?
+            # 绑定地址和端口
             server_socket.bind((host, port))
 
-            # 开始监听，最大连接数�?
+            # 开始监听，最大连接数由 listen 参数控制
             server_socket.listen(5)
             print(f"服务器已启动，监听地址: {host}:{port}")
-            print(f"支持的请求类�? {', '.join([f'{k}({v})' for k, v in self.REQUEST_TYPES.items()])}")
+            print(f"支持的请求类型: {', '.join([f'{k}({v})' for k, v in self.REQUEST_TYPES.items()])}")
             self.logger.info(f"服务器已启动，监听地址: {host}:{port}")
 
             try:
                 while True:
-                    # 接受客户端连�?
+                    # 接受客户端连接
                     client_socket, client_address = server_socket.accept()
                     reject = False
                     try:
@@ -962,4 +970,3 @@ def run(host="localhost", port=30415):
 
 if __name__ == "__main__":
     run("127.0.0.1")
-
