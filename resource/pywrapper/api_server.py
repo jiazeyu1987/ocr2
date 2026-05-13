@@ -4,14 +4,19 @@ import ctypes
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional, Tuple
+
+import numpy as np
+from PIL import Image
 
 
 PASSWORD = "31415"
@@ -38,6 +43,40 @@ class StateInfo(ctypes.Structure):
         ("USBLinkState", ctypes.c_int),
         ("AppRunState", ctypes.c_int),
     ]
+
+
+@dataclass(frozen=True)
+class FrameSnapshot:
+    image: np.ndarray
+    seq: int
+    ts: float
+
+
+@dataclass(frozen=True)
+class OfflineConfig:
+    roi2_extension_params: dict = field(default_factory=lambda: {"left": 40, "right": 40, "top": 50, "bottom": 30})
+    roi3_extension_params: dict = field(default_factory=lambda: {"left": 30, "right": 30, "top": 50, "bottom": 100})
+    difference_threshold: float = 0.5
+    debug_save_enabled: bool = False
+    debug_save_dir: str = "D:/software_data/tmp"
+
+    @staticmethod
+    def default() -> "OfflineConfig":
+        return OfflineConfig()
+
+
+@dataclass
+class OfflineSession:
+    point_id: object
+    before: np.ndarray
+    before_seq: int
+    before_ts: float
+    focus_anchor: Tuple[int, int]
+    roi2_rect: Tuple[int, int, int, int]
+    roi3_rect: Tuple[int, int, int, int]
+    before_mean: float
+    debug_dir: Optional[str] = None
+    meta: dict = field(default_factory=dict)
 
 
 class MSG(ctypes.Structure):
@@ -121,6 +160,176 @@ def import_mobile_comm():
     return PyMobileComm
 
 
+def parse_focus_point(value) -> Optional[Tuple[int, int]]:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        try:
+            return int(float(value[0])), int(float(value[1]))
+        except Exception:
+            return None
+
+    text = str(value).strip()
+    match = re.search(r"PointF\(\s*([^,\s]+)\s*,\s*([^)]+?)\s*\)", text)
+    if not match:
+        return None
+    try:
+        return int(float(match.group(1))), int(float(match.group(2)))
+    except Exception:
+        return None
+
+
+def compute_roi_region(
+    frame_size: Tuple[int, int],
+    anchor: Tuple[int, int],
+    extension_params: dict,
+) -> Optional[Tuple[int, int, int, int]]:
+    width, height = frame_size
+    ax, ay = anchor
+    try:
+        left = int(extension_params["left"])
+        right = int(extension_params["right"])
+        top = int(extension_params["top"])
+        bottom = int(extension_params["bottom"])
+    except Exception:
+        return None
+
+    x1 = int(ax) - left
+    y1 = int(ay) - top
+    x2 = int(ax) + right
+    y2 = int(ay) + bottom
+    if x1 < 0 or y1 < 0 or x2 > width or y2 > height:
+        return None
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return x1, y1, x2, y2
+
+
+def roi_gray_mean(image: np.ndarray, rect: Tuple[int, int, int, int]) -> float:
+    x1, y1, x2, y2 = rect
+    roi = image[y1:y2, x1:x2]
+    if roi.size == 0:
+        raise ValueError("empty ROI")
+    if roi.ndim == 3:
+        roi = roi.astype(np.float32)
+        gray = 0.299 * roi[:, :, 0] + 0.587 * roi[:, :, 1] + 0.114 * roi[:, :, 2]
+        return float(np.mean(gray))
+    return float(np.mean(roi.astype(np.float32)))
+
+
+def crop_rect(image: np.ndarray, rect: Tuple[int, int, int, int]) -> np.ndarray:
+    x1, y1, x2, y2 = rect
+    cropped = image[y1:y2, x1:x2]
+    if cropped.size == 0:
+        raise ValueError(f"empty crop for rect={rect}")
+    return np.array(cropped, copy=True)
+
+
+def write_png(path: Path, image: np.ndarray) -> None:
+    arr = np.asarray(image)
+    if arr.ndim == 2:
+        pil_image = Image.fromarray(arr)
+    elif arr.ndim == 3 and arr.shape[2] == 3:
+        pil_image = Image.fromarray(arr.astype(np.uint8))
+    elif arr.ndim == 3 and arr.shape[2] == 4:
+        pil_image = Image.fromarray(arr.astype(np.uint8))
+    else:
+        raise ValueError(f"unsupported image shape for png: {arr.shape}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pil_image.save(path, format="PNG")
+
+
+class DebugFrameSaver:
+    def create_session_dir(self, root_dir: str, point_id) -> str:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        day = datetime.now().strftime("%Y%m%d")
+        safe_point = re.sub(r"[^0-9A-Za-z_.-]+", "_", str(point_id))
+        path = Path(root_dir) / "pywrapper_offline" / day / f"{safe_point}_{ts}"
+        path.mkdir(parents=True, exist_ok=False)
+        return str(path)
+
+    def save_stage(
+        self,
+        debug_dir: str,
+        stage: str,
+        frame: np.ndarray,
+        roi2_rect: Tuple[int, int, int, int],
+        roi3_rect: Tuple[int, int, int, int],
+    ) -> None:
+        base = Path(debug_dir)
+        write_png(base / f"{stage}_roi1.png", frame)
+        write_png(base / f"{stage}_roi2.png", crop_rect(frame, roi2_rect))
+        write_png(base / f"{stage}_roi3.png", crop_rect(frame, roi3_rect))
+
+    def write_meta(self, debug_dir: str, meta: dict) -> None:
+        path = Path(debug_dir) / "meta.json"
+        path.write_text(json.dumps(meta, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+
+def resolve_settings_path() -> Path:
+    if getattr(sys, "frozen", False):
+        candidates = [
+            Path(sys.executable).resolve().parent / "settings",
+            Path(__file__).resolve().parent / "settings",
+        ]
+    else:
+        candidates = [Path(__file__).resolve().parents[2] / "settings"]
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
+
+
+def load_offline_config(logger: logging.Logger) -> OfflineConfig:
+    settings_path = resolve_settings_path()
+    if not settings_path.exists():
+        raise FileNotFoundError(f"required settings file not found: {settings_path}")
+
+    with open(settings_path, "r", encoding="utf-8") as f:
+        settings = json.load(f)
+
+    return parse_offline_config(settings, logger)
+
+
+def parse_offline_config(settings: dict, logger: logging.Logger) -> OfflineConfig:
+    peak = settings.get("peak_detect")
+    if not isinstance(peak, dict):
+        raise ValueError("settings.peak_detect is required for OFFLINE")
+    roi2_ext = peak.get("roi2_extension_params")
+    if not isinstance(roi2_ext, dict):
+        raise ValueError("settings.peak_detect.roi2_extension_params is required for OFFLINE")
+    roi3_ext = peak.get("roi3_extension_params")
+    if not isinstance(roi3_ext, dict):
+        raise ValueError("settings.peak_detect.roi3_extension_params is required for OFFLINE")
+    threshold = peak.get("difference_threshold")
+    if threshold is None:
+        raise ValueError("settings.peak_detect.difference_threshold is required for OFFLINE")
+    tmp = settings.get("offline_tmp_frames")
+    if not isinstance(tmp, dict):
+        raise ValueError("settings.offline_tmp_frames is required for OFFLINE debug saving")
+    debug_save_dir = tmp.get("dir")
+    if not debug_save_dir:
+        raise ValueError("settings.offline_tmp_frames.dir is required for OFFLINE debug saving")
+
+    config = OfflineConfig(
+        roi2_extension_params=dict(roi2_ext),
+        roi3_extension_params=dict(roi3_ext),
+        difference_threshold=float(threshold),
+        debug_save_enabled=bool(tmp.get("enabled", False)),
+        debug_save_dir=str(debug_save_dir),
+    )
+    logger.info(
+        "offline config loaded: roi2_extension_params=%s roi3_extension_params=%s difference_threshold=%s "
+        "debug_save_enabled=%s debug_save_dir=%s",
+        config.roi2_extension_params,
+        config.roi3_extension_params,
+        config.difference_threshold,
+        config.debug_save_enabled,
+        config.debug_save_dir,
+    )
+    return config
+
+
 def create_hidden_window() -> int:
     user32 = ctypes.windll.user32
     hwnd = user32.CreateWindowExW(
@@ -172,10 +381,11 @@ class MobileCommEngine:
         self._hwnd: Optional[int] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._frame_lock = threading.Lock()
+        self._latest_frame: Optional[FrameSnapshot] = None
+        self._frame_seq = 0
 
     def configure(self) -> None:
-        self._logger.info("registering SetOnClientOnceMsg callback")
-        self._comm.SetOnClientOnceMsg(self._on_control_msg_received)
         self._logger.info("registering SetOnImageInfoOnceMsg callback")
         self._comm.SetOnImageInfoOnceMsg(self._on_image_info_received)
         self._logger.info("registering SetOnClientStateInfoOnceMsg callback")
@@ -216,12 +426,23 @@ class MobileCommEngine:
                 raise
             self._stop_event.wait(self._stream_interval_s)
 
-    def _on_control_msg_received(self, header_ptr, data_bytes) -> None:
-        self._logger.info("control callback received header_ptr=%s data_type=%s", header_ptr, type(data_bytes).__name__)
-
     def _on_image_info_received(self, header_ptr, image_matrix) -> None:
         shape = getattr(image_matrix, "shape", None)
         self._logger.info("image callback received header_ptr=%s image_shape=%s", header_ptr, shape)
+        try:
+            frame = np.array(image_matrix, copy=True)
+        except Exception:
+            self._logger.exception("failed to copy image_matrix from image callback")
+            return
+        with self._frame_lock:
+            self._frame_seq += 1
+            self._latest_frame = FrameSnapshot(frame, self._frame_seq, time.time())
+
+    def get_latest_frame(self) -> Optional[FrameSnapshot]:
+        with self._frame_lock:
+            if self._latest_frame is None:
+                return None
+            return FrameSnapshot(np.array(self._latest_frame.image, copy=True), self._latest_frame.seq, self._latest_frame.ts)
 
     def _on_state_info_received(self, error_info_ptr) -> None:
         if error_info_ptr == 0:
@@ -272,11 +493,208 @@ class PyMobileCommProvider:
             self._logger.info("GetContentProvider returned type=%s", type(data).__name__)
             return data
 
+    def get_latest_frame(self) -> Optional[FrameSnapshot]:
+        return self._engine.get_latest_frame()
+
     def close(self) -> None:
         with self._lock:
             self._engine.stop()
             self._logger.info("calling Stop_AutoInitialize")
             self._comm.Stop_AutoInitialize()
+
+
+class OfflineSessionManager:
+    def __init__(
+        self,
+        provider_fetcher: Callable[[], dict],
+        frame_fetcher: Callable[[], Optional[FrameSnapshot]],
+        config: OfflineConfig,
+        logger: Optional[logging.Logger] = None,
+        debug_saver: Optional[DebugFrameSaver] = None,
+    ):
+        self._provider_fetcher = provider_fetcher
+        self._frame_fetcher = frame_fetcher
+        self._config = config
+        self._logger = logger or logging.getLogger("pywrapper_api_server")
+        self._debug_saver = debug_saver or DebugFrameSaver()
+        self._lock = threading.Lock()
+        self._sessions: dict[object, OfflineSession] = {}
+
+    def handle(self, arg_json_text: Optional[str]) -> dict:
+        arg_obj = self._parse_arg(arg_json_text)
+        point_id = arg_obj.get("point_id")
+        if point_id is None:
+            return {"success": False, "info": "missing_point_id"}
+
+        with self._lock:
+            if point_id in self._sessions:
+                return self._stop(point_id)
+            return self._start(point_id)
+
+    def _parse_arg(self, arg_json_text: Optional[str]) -> dict:
+        if not arg_json_text:
+            raise ValueError("OFFLINE requires JSON args")
+        obj = json.loads(arg_json_text)
+        if not isinstance(obj, dict):
+            raise ValueError("OFFLINE args must be JSON object")
+        return obj
+
+    def _start(self, point_id) -> dict:
+        frame = self._frame_fetcher()
+        if frame is None:
+            self._logger.warning("OFFLINE start failed: no_device_frame point_id=%s", point_id)
+            return {"success": False, "info": "no_device_frame", "point_id": point_id}
+
+        raw_provider = self._provider_fetcher()
+        focus_point = raw_provider.get("focus_point") if isinstance(raw_provider, dict) else None
+        if focus_point is None:
+            self._logger.warning("OFFLINE start failed: missing_focus_point point_id=%s provider=%s", point_id, safe_json_text(raw_provider))
+            return {"success": False, "info": "missing_focus_point", "point_id": point_id}
+
+        anchor = parse_focus_point(focus_point)
+        if anchor is None:
+            self._logger.warning("OFFLINE start failed: invalid_focus_point point_id=%s focus_point=%r", point_id, focus_point)
+            return {"success": False, "info": "invalid_focus_point", "point_id": point_id, "focus_point": focus_point}
+
+        height, width = frame.image.shape[:2]
+        roi2_rect = compute_roi_region((width, height), anchor, self._config.roi2_extension_params)
+        if roi2_rect is None:
+            self._logger.warning(
+                "OFFLINE start failed: invalid_roi2_rect point_id=%s frame_shape=%s anchor=%s roi2_ext=%s",
+                point_id,
+                frame.image.shape,
+                anchor,
+                self._config.roi2_extension_params,
+            )
+            return {"success": False, "info": "invalid_roi2_rect", "point_id": point_id}
+        roi3_rect = compute_roi_region((width, height), anchor, self._config.roi3_extension_params)
+        if roi3_rect is None:
+            self._logger.warning(
+                "OFFLINE start failed: invalid_roi3_rect point_id=%s frame_shape=%s anchor=%s roi3_ext=%s",
+                point_id,
+                frame.image.shape,
+                anchor,
+                self._config.roi3_extension_params,
+            )
+            return {"success": False, "info": "invalid_roi3_rect", "point_id": point_id}
+
+        before_mean = roi_gray_mean(frame.image, roi2_rect)
+        debug_dir = None
+        meta = {
+            "point_id": point_id,
+            "focus_anchor": [int(anchor[0]), int(anchor[1])],
+            "roi2_rect": [int(v) for v in roi2_rect],
+            "roi3_rect": [int(v) for v in roi3_rect],
+            "before": {
+                "frame_seq": int(frame.seq),
+                "frame_ts": float(frame.ts),
+                "frame_shape": [int(v) for v in frame.image.shape],
+                "roi2_mean": round(float(before_mean), 6),
+            },
+        }
+        if self._config.debug_save_enabled:
+            try:
+                debug_dir = self._debug_saver.create_session_dir(self._config.debug_save_dir, point_id)
+                self._debug_saver.save_stage(debug_dir, "before", frame.image, roi2_rect, roi3_rect)
+                self._debug_saver.write_meta(debug_dir, meta)
+            except Exception as exc:
+                self._logger.exception("OFFLINE debug save failed on start: point_id=%s", point_id)
+                return {"success": False, "info": "debug_save_failed", "point_id": point_id, "error": str(exc)}
+
+        session = OfflineSession(
+            point_id=point_id,
+            before=np.array(frame.image, copy=True),
+            before_seq=frame.seq,
+            before_ts=frame.ts,
+            focus_anchor=anchor,
+            roi2_rect=roi2_rect,
+            roi3_rect=roi3_rect,
+            before_mean=before_mean,
+            debug_dir=debug_dir,
+            meta=meta,
+        )
+        self._sessions[point_id] = session
+        self._logger.info(
+            "OFFLINE started: point_id=%s frame_seq=%s frame_shape=%s focus_point=%r anchor=%s "
+            "roi2_rect=%s roi3_rect=%s before_mean=%.3f debug_dir=%s",
+            point_id,
+            frame.seq,
+            frame.image.shape,
+            focus_point,
+            anchor,
+            roi2_rect,
+            roi3_rect,
+            before_mean,
+            debug_dir,
+        )
+        result = {"success": True, "info": "offline_started", "point_id": point_id}
+        if debug_dir is not None:
+            result["debug_dir"] = debug_dir
+        return result
+
+    def _stop(self, point_id) -> dict:
+        session = self._sessions[point_id]
+        frame = self._frame_fetcher()
+        if frame is None:
+            self._logger.warning("OFFLINE stop failed: no_device_frame point_id=%s", point_id)
+            return {"success": False, "info": "no_device_frame", "point_id": point_id}
+
+        after_mean = roi_gray_mean(frame.image, session.roi2_rect)
+        diff = float(after_mean - session.before_mean)
+        color = "green" if diff >= self._config.difference_threshold else "red"
+        result = {
+            "success": True,
+            "info": "offline_stop_completed",
+            "point_id": point_id,
+            "roi2_color": color,
+            "roi2_diff": round(diff, 6),
+            "roi2_before_mean": round(float(session.before_mean), 6),
+            "roi2_after_mean": round(float(after_mean), 6),
+            "focus_anchor": [int(session.focus_anchor[0]), int(session.focus_anchor[1])],
+            "roi2_rect": [int(v) for v in session.roi2_rect],
+            "roi3_rect": [int(v) for v in session.roi3_rect],
+        }
+        if session.debug_dir is not None:
+            result["debug_dir"] = session.debug_dir
+            meta = dict(session.meta)
+            meta["after"] = {
+                "frame_seq": int(frame.seq),
+                "frame_ts": float(frame.ts),
+                "frame_shape": [int(v) for v in frame.image.shape],
+                "roi2_mean": round(float(after_mean), 6),
+            }
+            meta["result"] = {
+                "roi2_color": color,
+                "roi2_diff": round(diff, 6),
+                "roi2_before_mean": round(float(session.before_mean), 6),
+                "roi2_after_mean": round(float(after_mean), 6),
+            }
+            try:
+                self._debug_saver.save_stage(session.debug_dir, "after", frame.image, session.roi2_rect, session.roi3_rect)
+                self._debug_saver.write_meta(session.debug_dir, meta)
+            except Exception as exc:
+                self._logger.exception("OFFLINE debug save failed on stop: point_id=%s", point_id)
+                return {"success": False, "info": "debug_save_failed", "point_id": point_id, "error": str(exc)}
+
+        self._sessions.pop(point_id, None)
+        self._logger.info(
+            "OFFLINE stopped: point_id=%s before_seq=%s after_seq=%s after_shape=%s anchor=%s roi2_rect=%s "
+            "roi3_rect=%s before_mean=%.3f after_mean=%.3f diff=%.3f threshold=%.3f color=%s debug_dir=%s",
+            point_id,
+            session.before_seq,
+            frame.seq,
+            frame.image.shape,
+            session.focus_anchor,
+            session.roi2_rect,
+            session.roi3_rect,
+            session.before_mean,
+            after_mean,
+            diff,
+            self._config.difference_threshold,
+            color,
+            session.debug_dir,
+        )
+        return result
 
 
 def parse_request(text: str) -> ParsedRequest:
@@ -352,6 +770,7 @@ def handle_request(
     request_text: str,
     provider_fetcher: Callable[[], dict],
     logger: Optional[logging.Logger] = None,
+    offline_handler: Optional[Callable[[Optional[str]], dict]] = None,
 ) -> str:
     parsed = parse_request(request_text)
     if logger is not None:
@@ -369,7 +788,9 @@ def handle_request(
         return json_response(converted_data)
 
     if parsed.req_type == "OFFLINE":
-        return json_response({"success": True, "info": "offline_ok"})
+        if offline_handler is None:
+            return json_response({"success": False, "info": "offline_not_configured"})
+        return json_response(offline_handler(parsed.arg))
 
     return json_response(
         {"success": False, "info": "unknown_request_type", "req_type": parsed.req_type}
@@ -439,9 +860,10 @@ def try_parse_buffer(buffer: str) -> Optional[Tuple[str, str]]:
 
 
 class ApiServer:
-    def __init__(self, provider: PyMobileCommProvider, logger: logging.Logger):
+    def __init__(self, provider: PyMobileCommProvider, logger: logging.Logger, offline_manager: OfflineSessionManager):
         self._provider = provider
         self._logger = logger
+        self._offline_manager = offline_manager
 
     def handle_client(self, client_socket: socket.socket, client_address) -> None:
         self._logger.info("client connected: %s", client_address)
@@ -471,7 +893,12 @@ class ApiServer:
 
     def _send_response(self, client_socket: socket.socket, request_text: str) -> None:
         try:
-            response = handle_request(request_text, self._provider.fetch, logger=self._logger)
+            response = handle_request(
+                request_text,
+                self._provider.fetch,
+                logger=self._logger,
+                offline_handler=self._offline_manager.handle,
+            )
         except Exception as exc:
             self._logger.exception("request failed: %r", request_text)
             response = json_response({"success": False, "info": "request_failed", "error": str(exc)})
@@ -519,9 +946,16 @@ def main(argv=None) -> int:
 
     logger = build_logger()
     log_process_environment(logger)
+    offline_config = load_offline_config(logger)
     provider = PyMobileCommProvider(logger)
+    offline_manager = OfflineSessionManager(
+        provider_fetcher=provider.fetch,
+        frame_fetcher=provider.get_latest_frame,
+        config=offline_config,
+        logger=logger,
+    )
     try:
-        ApiServer(provider, logger).serve_forever(args.host, args.port)
+        ApiServer(provider, logger, offline_manager).serve_forever(args.host, args.port)
     finally:
         provider.close()
     return 0
