@@ -72,12 +72,14 @@ class OCRDetect:
                     self.logger.error(msg + " (No CPU fallback; set settings['gpu_fallback_to_cpu']=true to enable.)")
 
         # 首先要导入一个全局的模型，不然每次都导入，会花费额外的时间
+        self._apply_paddle_inference_stability_patch()
         self.OCR_MDOEL = PaddleOCR(use_angle_cls=True, lang="ch", use_gpu=use_gpu, rec_image_shape='3, 24, 160', rec_batch_num=8,
                         precision='fp32', show_log=setting['log'] if 'log' in setting else False,
 
                        det_model_dir=_abs_if_relative(setting['det']) if 'det' in setting else os.path.join(cur_dir, 'whl', 'det', 'ch', 'ch_PP-OCRv4_det_infer'),
                        rec_model_dir=_abs_if_relative(setting['rec']) if 'rec' in setting else os.path.join(cur_dir, 'whl', 'rec', 'ch', 'ch_PP-OCRv4_rec_infer'),
                        cls_model_dir=_abs_if_relative(setting['cls']) if 'cls' in setting else os.path.join(cur_dir, 'whl', 'cls', 'ch_ppocr_mobile_v2.0_cls_infer'),
+                       ir_optim=False, enable_mkldnn=False,
                                    )  # need to run only once to download and load model into memory
         print(os.path.join(cur_dir, 'whl/cls/ch_ppocr_mobile_v2.0_cls_infer'))
         self.time_skip = float(setting['time_skip']) if 'time_skip' in setting else 0.0
@@ -121,6 +123,34 @@ class OCRDetect:
             "Is_Freeze": {"stable": False, "candidate": None, "count": 0},
             "Is_HIFU": {"stable": False, "candidate": None, "count": 0},
         }
+
+
+    def _apply_paddle_inference_stability_patch(self):
+        """
+        PaddleOCR 2.10 + PaddlePaddle 3.3.x on Windows/Python 3.12 may crash with:
+          OneDnnContext does not have the input Filter (operator fused_conv2d)
+        Disable IR optimization to avoid this fused pass crash.
+        """
+        try:
+            from paddle import inference
+        except Exception:
+            self.logger.exception("Failed to import paddle.inference for OCR stability patch")
+            raise
+
+        if getattr(inference.Config, "_ocr2_ir_optim_patched", False):
+            return
+
+        original = inference.Config.switch_ir_optim
+
+        def _switch_ir_optim_disabled(self_config, flag):
+            return original(self_config, False)
+
+        inference.Config.switch_ir_optim = _switch_ir_optim_disabled
+        inference.Config._ocr2_ir_optim_patched = True
+        self.logger.warning(
+            "Applied OCR stability patch: force Paddle Inference switch_ir_optim(False) "
+            "to avoid OneDnn fused_conv2d runtime crash."
+        )
 
 
     def get_gpu_count(self):
@@ -722,8 +752,5 @@ if __name__ == '__main__':
         counter -= 1
 
     print(time.time() - time_in2)
-
-
-
 
 

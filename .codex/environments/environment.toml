@@ -9,3 +9,13 @@ script = ""
 name = "运行"
 icon = "run"
 command = "python ./offline_toggle_gui.py"
+
+[[actions]]
+name = "offline_toggle_gui"
+icon = "run"
+command = "python .\\offline_toggle_gui.py"
+
+[[actions]]
+name = "打包1"
+icon = "run"
+command = "./package_pywrapper_server.bat"

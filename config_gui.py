@@ -78,6 +78,7 @@ class SimpleFEMConfigGUI:
         self.roi2_high_gray_match_var = tk.StringVar(value="命中: 0/0")
         self.scan_roi2_high_gray_button = None
         self.load_offline_db_button = None
+        self.clear_offline_db_button = None
         self.prev_roi2_high_gray_button = None
         self.next_roi2_high_gray_button = None
         self.toggle_roi2_neighbor_display_button = None
@@ -818,6 +819,13 @@ class SimpleFEMConfigGUI:
             command=self.load_latest_offline_db_images
         )
         self.load_offline_db_button.pack(side=tk.LEFT, padx=(8, 0))
+
+        self.clear_offline_db_button = ttk.Button(
+            scan_row,
+            text="清除OFFLINE历史图",
+            command=self.clear_all_offline_db_images
+        )
+        self.clear_offline_db_button.pack(side=tk.LEFT, padx=(8, 0))
 
         nav_group = ttk.LabelFrame(control_frame, text="命中导航", padding=(10, 8))
         nav_group.grid(row=0, column=2, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
@@ -1585,6 +1593,8 @@ class SimpleFEMConfigGUI:
             self.scan_roi2_high_gray_button.config(state=scan_button_state)
         if self.load_offline_db_button is not None:
             self.load_offline_db_button.config(state=load_offline_button_state)
+        if self.clear_offline_db_button is not None:
+            self.clear_offline_db_button.config(state=load_offline_button_state)
         if self.prev_roi2_high_gray_button is not None:
             self.prev_roi2_high_gray_button.config(state=nav_button_state)
         if self.next_roi2_high_gray_button is not None:
@@ -2053,6 +2063,72 @@ class SimpleFEMConfigGUI:
             return None
         return self.parse_offline_image_record(rows[0])
 
+    def clear_offline_image_paths_in_db(self):
+        db_path = self.offline_db_path
+        if not os.path.exists(db_path):
+            raise FileNotFoundError(f"数据库文件不存在: {db_path}")
+
+        with sqlite3.connect(db_path, timeout=30) as db:
+            cur = db.cursor()
+            has_table = cur.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='SegmentImagesInfo' LIMIT 1"
+            ).fetchone()
+            if has_table is None:
+                raise RuntimeError("数据库缺少 SegmentImagesInfo 表")
+
+            count_row = cur.execute(
+                "SELECT COUNT(*) FROM SegmentImagesInfo "
+                "WHERE ImagePath IS NOT NULL AND ImagePath LIKE '%;%;%'"
+            ).fetchone()
+            to_clear = int(count_row[0]) if count_row and count_row[0] is not None else 0
+            if to_clear <= 0:
+                return 0
+
+            cur.execute(
+                "UPDATE SegmentImagesInfo "
+                "SET ImagePath = NULL "
+                "WHERE ImagePath IS NOT NULL AND ImagePath LIKE '%;%;%'"
+            )
+            db.commit()
+            return to_clear
+
+    def clear_all_offline_db_images(self):
+        if self.is_scanning_roi2_high_gray:
+            self.status_var.set("正在扫描中，暂不可清除 OFFLINE 历史图")
+            return
+
+        confirmed = messagebox.askyesno(
+            "确认清除",
+            "将清空数据库中所有 OFFLINE before/after/differ 图片记录，是否继续？"
+        )
+        if not confirmed:
+            return
+
+        try:
+            cleared_count = self.clear_offline_image_paths_in_db()
+        except Exception as e:
+            msg = f"清除 OFFLINE 历史图片失败: {e}"
+            self.status_var.set(msg)
+            messagebox.showerror("清除失败", msg)
+            return
+
+        self.offline_db_record = None
+        self.offline_db_records = []
+        self.current_offline_db_position = -1
+        self.update_roi2_compare_panel_titles()
+        self.update_roi2_high_gray_match_ui()
+        self.refresh_roi2_high_gray_comparison()
+
+        if cleared_count <= 0:
+            msg = "数据库中没有可清除的 OFFLINE 图片记录"
+            self.status_var.set(msg)
+            messagebox.showinfo("清除完成", msg)
+            return
+
+        msg = f"已清除 {cleared_count} 条 OFFLINE before/after/differ 图片记录"
+        self.status_var.set(msg)
+        messagebox.showinfo("清除完成", msg)
+
     def apply_offline_db_record_position(self, position):
         total = len(self.offline_db_records)
         if total <= 0:
@@ -2477,7 +2553,7 @@ class SimpleFEMConfigGUI:
         })
 
     def poll_roi2_high_gray_scan_result(self, scan_id):
-        """鍦ㄤ富绾跨▼杞鎵弿缁撴灉锛岄伩鍏嶅悗鍙扮嚎绋嬭Е纰?Tk"""
+        """在主线程轮询扫描结果，避免后台线程直接触碰 Tk。"""
         self.roi2_high_gray_scan_poll_job = None
 
         if scan_id != self.roi2_high_gray_scan_id or not self.is_scanning_roi2_high_gray:
@@ -5233,11 +5309,11 @@ class SimpleFEMConfigGUI:
             dir_path = os.path.dirname(current_file)
             normalized_current = os.path.normpath(current_file)
 
-            print(f"[DEBUG] 鍒嗘瀽鏂囦欢鍚? {filename}")
+            print(f"[DEBUG] 分析文件名: {filename}")
 
             numeric_matches = list(re.finditer(r'(\d+)', filename))
             if not numeric_matches:
-                print(f"[ERROR] 鏂囦欢鍚嶄腑鏈壘鍒版暟瀛? {filename}")
+                print(f"[ERROR] 文件名中未找到数字: {filename}")
                 self.current_image_sequence = []
                 self.current_image_index = -1
                 return
@@ -5246,8 +5322,8 @@ class SimpleFEMConfigGUI:
             sequence_number = int(match.group(1))
             prefix = filename[:match.start()]
             suffix = filename[match.end():]
-            print(f"[DEBUG] 褰撳墠鏂囦欢搴忓垪鍙? {sequence_number}")
-            print(f"[DEBUG] 鍖归厤妯℃澘: prefix={prefix!r}, suffix={suffix!r}")
+            print(f"[DEBUG] 当前文件序列号: {sequence_number}")
+            print(f"[DEBUG] 匹配模板: prefix={prefix!r}, suffix={suffix!r}")
 
             sequence_pattern = re.compile(
                 r'^' + re.escape(prefix) + r'(\d+)' + re.escape(suffix) + r'$',
@@ -5269,22 +5345,22 @@ class SimpleFEMConfigGUI:
             normalized_sequence = [os.path.normpath(path) for path in sorted_sequence]
 
             current_index = normalized_sequence.index(normalized_current)
-            print(f"[SUCCESS] 搴忓垪闀垮害: {len(sorted_sequence)}, 褰撳墠绱㈠紩: {current_index}")
+            print(f"[SUCCESS] 序列长度: {len(sorted_sequence)}, 当前索引: {current_index}")
 
             self.current_image_sequence = sorted_sequence
             self.current_image_index = current_index
 
-            print(f"[DEBUG] 妫€娴嬪埌瀹屾暣搴忓垪:")
+            print(f"[DEBUG] 检测到完整序列:")
             for index, file_path in enumerate(sorted_sequence):
                 print(f"[DEBUG] {index:2d}: {os.path.basename(file_path)}")
-            print(f"[INFO] 褰撳墠鍥剧墖: {os.path.basename(current_file)} (绱㈠紩 {current_index})")
+            print(f"[INFO] 当前图片: {os.path.basename(current_file)} (索引 {current_index})")
 
         except ValueError:
-            print(f"[ERROR] 褰撳墠鏂囦欢涓嶅湪搴忓垪涓? {os.path.basename(current_file)}")
+            print(f"[ERROR] 当前文件不在序列中: {os.path.basename(current_file)}")
             self.current_image_sequence = []
             self.current_image_index = -1
         except Exception as e:
-            print(f"[ERROR] 搴忓垪妫€娴嬪け璐? {e}")
+            print(f"[ERROR] 序列检测失败: {e}")
             import traceback
             traceback.print_exc()
             self.current_image_sequence = []
@@ -5304,12 +5380,12 @@ class SimpleFEMConfigGUI:
             dir_path = os.path.dirname(current_file)
             normalized_current = os.path.normpath(current_file)
 
-            print(f"[DEBUG] 鍒嗘瀽鏂囦欢鍚? {filename}")
+            print(f"[DEBUG] 分析文件名: {filename}")
 
             folder_files = self.get_supported_image_files_in_folder(dir_path)
             numeric_matches = list(re.finditer(r'(\d+)', filename))
             if not numeric_matches:
-                print(f"[ERROR] 鏂囦欢鍚嶄腑鏈壘鍒版暟瀛? {filename}")
+                print(f"[ERROR] 文件名中未找到数字: {filename}")
                 self.current_image_sequence = []
                 self.current_image_index = -1
                 return
@@ -5348,7 +5424,7 @@ class SimpleFEMConfigGUI:
                 })
 
             if not candidate_sequences:
-                print(f"[ERROR] 鏈壘鍒颁笌褰撳墠鍛藉悕绛夋ā寮忎竴鑷寸殑鍥剧墖搴忓垪: {filename}")
+                print(f"[ERROR] 未找到与当前命名模式一致的图片序列: {filename}")
                 self.current_image_sequence = []
                 self.current_image_index = -1
                 return
@@ -5361,7 +5437,7 @@ class SimpleFEMConfigGUI:
             normalized_sequence = [os.path.normpath(path) for path in sorted_sequence]
 
             if normalized_current not in normalized_sequence:
-                print(f"[ERROR] 褰撳墠鏂囦欢涓嶅湪搴忓垪涓? {filename}")
+                print(f"[ERROR] 当前文件不在序列中: {filename}")
                 self.current_image_sequence = []
                 self.current_image_index = -1
                 return
@@ -5371,18 +5447,18 @@ class SimpleFEMConfigGUI:
             self.current_image_index = current_index
 
             print(
-                f"[SUCCESS] 搴忓垪闀垮害: {len(sorted_sequence)}, "
-                f"褰撳墠绱㈠紩: {current_index}, "
+                f"[SUCCESS] 序列长度: {len(sorted_sequence)}, "
+                f"当前索引: {current_index}, "
                 f"prefix={best_candidate['prefix']!r}, suffix={best_candidate['suffix']!r}, "
                 f"current_number={best_candidate['current_number']}"
             )
-            print(f"[DEBUG] 妫€娴嬪埌瀹屾暣搴忓垪:")
+            print(f"[DEBUG] 检测到完整序列:")
             for index, file_path in enumerate(sorted_sequence):
                 print(f"[DEBUG] {index:2d}: {os.path.basename(file_path)}")
-            print(f"[INFO] 褰撳墠鍥剧墖: {os.path.basename(current_file)} (绱㈠紩 {current_index})")
+            print(f"[INFO] 当前图片: {os.path.basename(current_file)} (索引 {current_index})")
 
         except Exception as e:
-            print(f"[ERROR] 搴忓垪妫€娴嬪け璐? {e}")
+            print(f"[ERROR] 序列检测失败: {e}")
             import traceback
             traceback.print_exc()
             self.current_image_sequence = []
