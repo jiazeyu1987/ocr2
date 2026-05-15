@@ -111,8 +111,28 @@ if not exist "%DIST_DIR%\%APP_NAME%.exe" (
     exit /b 1
 )
 
+for %%F in (Company.ini AdbWinApi.dll AdbWinUsbApi.dll) do (
+    if not exist "%SERVER_DIR%\%%F" (
+        echo [ERROR] Required root runtime file not found: %SERVER_DIR%\%%F
+        exit /b 1
+    )
+    copy /Y "%SERVER_DIR%\%%F" "%DIST_DIR%\%%F" >nul
+    if errorlevel 1 (
+        echo [ERROR] Failed to copy root runtime file: %%F
+        exit /b 1
+    )
+    if not exist "%DIST_DIR%\%%F" (
+        echo [ERROR] Root runtime file copy finished but file was not found: %DIST_DIR%\%%F
+        exit /b 1
+    )
+)
+
 echo [OK] Server exe created:
 echo      %DIST_DIR%\%APP_NAME%.exe
+echo [OK] Root runtime files copied beside server exe:
+echo      Company.ini
+echo      AdbWinApi.dll
+echo      AdbWinUsbApi.dll
 
 if exist "%COMPAT_DIST_DIR%" (
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
