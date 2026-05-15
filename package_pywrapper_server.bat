@@ -72,7 +72,7 @@ pushd "%ROOT_DIR%" || exit /b 1
   --noconfirm ^
   --clean ^
   --onedir ^
-  --console ^
+  --windowed ^
   --name "%APP_NAME%" ^
   --paths "%SERVER_DIR%" ^
   --distpath "%ROOT_DIR%dist" ^
