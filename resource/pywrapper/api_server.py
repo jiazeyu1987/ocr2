@@ -742,14 +742,40 @@ def safe_json_text(payload) -> str:
         return repr(payload)
 
 
+def online_wall_time() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+def log_online_timepoint(
+    logger: Optional[logging.Logger],
+    trace_id: Optional[str],
+    step: str,
+    **fields,
+) -> None:
+    if logger is None:
+        return
+    parts = [
+        f"ONLINE timepoint trace_id={trace_id or 'none'}",
+        f"step={step}",
+        f"wall_time={online_wall_time()}",
+        f"perf_counter_ns={time.perf_counter_ns()}",
+    ]
+    for key, value in fields.items():
+        if value is not None:
+            parts.append(f"{key}={value}")
+    logger.info(" | ".join(parts))
+
+
 def log_online_diagnostics(
     logger: Optional[logging.Logger],
     raw_data: dict,
     converted_data: dict,
+    trace_id: Optional[str] = None,
 ) -> None:
     if logger is None:
         return
 
+    log_online_timepoint(logger, trace_id, "diagnostics_start")
     logger.info("ONLINE raw provider data: %s", safe_json_text(raw_data))
     logger.info("ONLINE converted response: %s", safe_json_text(converted_data))
 
@@ -764,6 +790,20 @@ def log_online_diagnostics(
     ]
     if null_response_fields:
         logger.warning("ONLINE null response fields: %s", ", ".join(null_response_fields))
+    log_online_timepoint(
+        logger,
+        trace_id,
+        "diagnostics_completed",
+        missing_provider_count=len(missing_provider_fields),
+        null_response_count=len(null_response_fields),
+    )
+
+
+def request_type_hint(request_text: str) -> str:
+    try:
+        return request_text.strip().split(";", 1)[0].strip().upper()
+    except Exception:
+        return ""
 
 
 def handle_request(
@@ -771,21 +811,42 @@ def handle_request(
     provider_fetcher: Callable[[], dict],
     logger: Optional[logging.Logger] = None,
     offline_handler: Optional[Callable[[Optional[str]], dict]] = None,
+    trace_id: Optional[str] = None,
 ) -> str:
+    if request_type_hint(request_text) == "ONLINE":
+        log_online_timepoint(logger, trace_id, "handle_request_entered", request_len=len(request_text))
+        log_online_timepoint(logger, trace_id, "parse_request_start")
     parsed = parse_request(request_text)
     if logger is not None:
         logger.info("request received: type=%s arg=%s", parsed.req_type, parsed.arg)
+    if parsed.req_type == "ONLINE":
+        log_online_timepoint(logger, trace_id, "parse_request_completed", arg=parsed.arg)
+        log_online_timepoint(logger, trace_id, "password_check_start")
 
     if parsed.param != PASSWORD:
         if logger is not None:
             logger.warning("request rejected: invalid password for type=%s", parsed.req_type)
+        if parsed.req_type == "ONLINE":
+            log_online_timepoint(logger, trace_id, "password_check_failed")
+            log_online_timepoint(logger, trace_id, "json_encode_start", response_kind="invalid_password")
+            response = json_response({"success": False, "info": "invalid_password"})
+            log_online_timepoint(logger, trace_id, "json_encode_completed", response_len=len(response))
+            return response
         return json_response({"success": False, "info": "invalid_password"})
 
     if parsed.req_type == "ONLINE":
+        log_online_timepoint(logger, trace_id, "password_check_passed")
+        log_online_timepoint(logger, trace_id, "provider_fetch_start")
         raw_data = provider_fetcher()
+        log_online_timepoint(logger, trace_id, "provider_fetch_completed", provider_type=type(raw_data).__name__)
+        log_online_timepoint(logger, trace_id, "convert_provider_start")
         converted_data = convert_provider_data(raw_data)
-        log_online_diagnostics(logger, raw_data, converted_data)
-        return json_response(converted_data)
+        log_online_timepoint(logger, trace_id, "convert_provider_completed")
+        log_online_diagnostics(logger, raw_data, converted_data, trace_id=trace_id)
+        log_online_timepoint(logger, trace_id, "json_encode_start", response_kind="online_success")
+        response = json_response(converted_data)
+        log_online_timepoint(logger, trace_id, "json_encode_completed", response_len=len(response))
+        return response
 
     if parsed.req_type == "OFFLINE":
         if offline_handler is None:
@@ -892,18 +953,48 @@ class ApiServer:
             self._logger.info("client closed: %s", client_address)
 
     def _send_response(self, client_socket: socket.socket, request_text: str) -> None:
+        trace_id = None
+        is_online_request = request_type_hint(request_text) == "ONLINE"
+        if is_online_request:
+            trace_id = f"{threading.get_ident()}-{time.time_ns()}"
+            log_online_timepoint(
+                self._logger,
+                trace_id,
+                "socket_request_dispatch_start",
+                request_len=len(request_text),
+            )
         try:
             response = handle_request(
                 request_text,
                 self._provider.fetch,
                 logger=self._logger,
                 offline_handler=self._offline_manager.handle,
+                trace_id=trace_id,
             )
         except Exception as exc:
             self._logger.exception("request failed: %r", request_text)
+            if is_online_request:
+                log_online_timepoint(
+                    self._logger,
+                    trace_id,
+                    "request_exception_caught",
+                    error=repr(exc),
+                )
+                log_online_timepoint(
+                    self._logger,
+                    trace_id,
+                    "json_encode_start",
+                    response_kind="request_failed",
+                )
             response = json_response({"success": False, "info": "request_failed", "error": str(exc)})
+            if is_online_request:
+                log_online_timepoint(self._logger, trace_id, "json_encode_completed", response_len=len(response))
+        if is_online_request:
+            log_online_timepoint(self._logger, trace_id, "socket_send_start", response_len=len(response))
         self._logger.info("response sent: %s", response)
         client_socket.sendall((response + "\n").encode("utf-8"))
+        if is_online_request:
+            log_online_timepoint(self._logger, trace_id, "socket_send_completed", response_len=len(response))
 
     def serve_forever(self, host: str, port: int) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:

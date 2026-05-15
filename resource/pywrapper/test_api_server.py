@@ -334,6 +334,32 @@ class ApiServerTests(unittest.TestCase):
         self.assertIn("depth", log_text)
         self.assertIn("focus_point", log_text)
 
+    def test_online_logs_timepoints(self):
+        stream = StringIO()
+        logger = logging.getLogger("test_online_logs_timepoints")
+        logger.handlers.clear()
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(logging.Formatter("%(levelname)s:%(message)s"))
+        logger.addHandler(handler)
+
+        response = api_server.handle_request(
+            'ONLINE;31415;{}',
+            provider_fetcher=lambda: {"isLive": True, "mode": 2, "focus_depth": "6.5"},
+            logger=logger,
+            trace_id="unit-trace",
+        )
+
+        self.assertEqual(json.loads(response)["SkinDepth"], "6.5")
+        log_text = stream.getvalue()
+        self.assertIn("ONLINE timepoint trace_id=unit-trace | step=handle_request_entered | wall_time=", log_text)
+        self.assertIn("step=provider_fetch_start", log_text)
+        self.assertIn("step=provider_fetch_completed", log_text)
+        self.assertIn("step=convert_provider_completed", log_text)
+        self.assertIn("step=json_encode_completed", log_text)
+        self.assertIn("perf_counter_ns=", log_text)
+
     def test_mobile_comm_engine_configures_callbacks_and_d3d_window(self):
         comm = Mock()
         logger = logging.getLogger("test_mobile_comm_engine_configures_callbacks_and_d3d_window")
