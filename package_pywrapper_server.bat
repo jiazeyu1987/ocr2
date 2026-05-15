@@ -7,6 +7,17 @@ set "ENTRY=%SERVER_DIR%\api_server.py"
 set "APP_NAME=pywrapper_api_server"
 set "DIST_DIR=%ROOT_DIR%dist\%APP_NAME%"
 set "ZIP_PATH=%ROOT_DIR%dist\%APP_NAME%.zip"
+set "COMPAT_APP_NAME=ocrapp_pureray"
+set "COMPAT_DIST_DIR=%ROOT_DIR%dist\OCRSERVER"
+set "COMPAT_ZIP_PATH=%ROOT_DIR%dist\OCRSERVER.zip"
+
+if not defined VEIN_MAIN_DIR (
+    set "VEIN_MAIN_DIR=D:\ProjectPackage\Vein\sqw\Vein"
+)
+if not defined DEPLOY_TO_VEIN_MAIN (
+    set "DEPLOY_TO_VEIN_MAIN=1"
+)
+set "VEIN_OCRSERVER_DIR=%VEIN_MAIN_DIR%\OCRSERVER"
 
 if not defined PYTHON_EXE (
     set "PYTHON_EXE=D:\miniconda3\envs\py39\python.exe"
@@ -15,6 +26,8 @@ if not defined PYTHON_EXE (
 echo [INFO] Root: %ROOT_DIR%
 echo [INFO] Server: %SERVER_DIR%
 echo [INFO] Python: %PYTHON_EXE%
+echo [INFO] Main program dir: %VEIN_MAIN_DIR%
+echo [INFO] Deploy to main program: %DEPLOY_TO_VEIN_MAIN%
 
 if not exist "%PYTHON_EXE%" (
     echo [ERROR] Python not found: %PYTHON_EXE%
@@ -77,9 +90,12 @@ pushd "%ROOT_DIR%" || exit /b 1
   --add-binary "%CONDA_BIN%\ffi.dll;." ^
   --add-binary "%CONDA_BIN%\libbz2.dll;." ^
   --add-binary "%CONDA_BIN%\libcrypto-3-x64.dll;." ^
+  --add-binary "%CONDA_BIN%\libexpat.dll;." ^
   --add-binary "%CONDA_BIN%\liblzma.dll;." ^
+  --add-binary "%CONDA_BIN%\libssl-3-x64.dll;." ^
   --add-data "%SERVER_DIR%\Company.ini;." ^
   --add-data "%SERVER_DIR%\license;." ^
+  --add-data "%ROOT_DIR%settings;." ^
   "%ENTRY%"
 
 set "BUILD_RC=%ERRORLEVEL%"
@@ -97,6 +113,58 @@ if not exist "%DIST_DIR%\%APP_NAME%.exe" (
 
 echo [OK] Server exe created:
 echo      %DIST_DIR%\%APP_NAME%.exe
+
+if exist "%COMPAT_DIST_DIR%" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$ErrorActionPreference='Stop'; Remove-Item -LiteralPath '%COMPAT_DIST_DIR%' -Recurse -Force"
+    if errorlevel 1 (
+        echo [ERROR] Failed to remove old compatible package directory: %COMPAT_DIST_DIR%
+        exit /b 1
+    )
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='Stop'; Copy-Item -LiteralPath '%DIST_DIR%' -Destination '%COMPAT_DIST_DIR%' -Recurse; Rename-Item -LiteralPath '%COMPAT_DIST_DIR%\%APP_NAME%.exe' -NewName '%COMPAT_APP_NAME%.exe'"
+if errorlevel 1 (
+    echo [ERROR] Failed to create main-program compatible package: %COMPAT_DIST_DIR%
+    exit /b 1
+)
+
+if not exist "%COMPAT_DIST_DIR%\%COMPAT_APP_NAME%.exe" (
+    echo [ERROR] Compatible exe was not found: %COMPAT_DIST_DIR%\%COMPAT_APP_NAME%.exe
+    exit /b 1
+)
+
+echo [OK] Main-program compatible server exe created:
+echo      %COMPAT_DIST_DIR%\%COMPAT_APP_NAME%.exe
+
+if "%DEPLOY_TO_VEIN_MAIN%"=="1" (
+    if not exist "%VEIN_MAIN_DIR%" (
+        echo [ERROR] Main program directory not found: %VEIN_MAIN_DIR%
+        exit /b 1
+    )
+    if exist "%VEIN_OCRSERVER_DIR%" (
+        powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+          "$ErrorActionPreference='Stop'; Remove-Item -LiteralPath '%VEIN_OCRSERVER_DIR%' -Recurse -Force"
+        if errorlevel 1 (
+            echo [ERROR] Failed to remove old main-program OCRSERVER directory: %VEIN_OCRSERVER_DIR%
+            echo [ERROR] Close running ocrapp_pureray.exe and retry.
+            exit /b 1
+        )
+    )
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$ErrorActionPreference='Stop'; Copy-Item -LiteralPath '%COMPAT_DIST_DIR%' -Destination '%VEIN_OCRSERVER_DIR%' -Recurse"
+    if errorlevel 1 (
+        echo [ERROR] Failed to deploy compatible server to: %VEIN_OCRSERVER_DIR%
+        exit /b 1
+    )
+    if not exist "%VEIN_OCRSERVER_DIR%\%COMPAT_APP_NAME%.exe" (
+        echo [ERROR] Main-program deployment finished but exe was not found: %VEIN_OCRSERVER_DIR%\%COMPAT_APP_NAME%.exe
+        exit /b 1
+    )
+    echo [OK] Main-program OCRSERVER deployed:
+    echo      %VEIN_OCRSERVER_DIR%\%COMPAT_APP_NAME%.exe
+)
 
 if exist "%ZIP_PATH%" (
     del /f /q "%ZIP_PATH%"
@@ -120,4 +188,27 @@ if not exist "%ZIP_PATH%" (
 
 echo [OK] Zip created:
 echo      %ZIP_PATH%
+
+if exist "%COMPAT_ZIP_PATH%" (
+    del /f /q "%COMPAT_ZIP_PATH%"
+    if errorlevel 1 (
+        echo [ERROR] Failed to remove old compatible zip: %COMPAT_ZIP_PATH%
+        exit /b 1
+    )
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='Stop'; Compress-Archive -LiteralPath '%COMPAT_DIST_DIR%' -DestinationPath '%COMPAT_ZIP_PATH%' -CompressionLevel Optimal"
+if errorlevel 1 (
+    echo [ERROR] Failed to create compatible zip: %COMPAT_ZIP_PATH%
+    exit /b 1
+)
+
+if not exist "%COMPAT_ZIP_PATH%" (
+    echo [ERROR] Compatible zip command finished but file was not found: %COMPAT_ZIP_PATH%
+    exit /b 1
+)
+
+echo [OK] Main-program compatible zip created:
+echo      %COMPAT_ZIP_PATH%
 exit /b 0
