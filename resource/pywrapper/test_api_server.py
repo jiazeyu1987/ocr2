@@ -40,14 +40,64 @@ class ApiServerTests(unittest.TestCase):
         self.assertEqual(
             api_server.convert_provider_data(raw),
             {
-                "SkinDepth": "7.5",
-                "A": "10.1",
-                "B": "20.2",
+                "SkinDepth": 7.5,
+                "A": 10.1,
+                "B": 20.2,
                 "Alpha": None,
-                "Depth": "35",
+                "Depth": 35,
                 "IsFreeze": False,
                 "isHIFU": True,
                 "FocusPoint": "F1",
+            },
+        )
+
+    def test_convert_provider_data_normalizes_online_numbers(self):
+        raw = {
+            "isLive": None,
+            "mode": 1,
+            "focus_depth": "7.555",
+            "guankuan_a": "10.005",
+            "guankuan_b": 20.0,
+            "depth": None,
+            "focus_point": None,
+        }
+
+        self.assertEqual(
+            api_server.convert_provider_data(raw),
+            {
+                "SkinDepth": 7.56,
+                "A": 10.01,
+                "B": 20,
+                "Alpha": None,
+                "Depth": None,
+                "IsFreeze": None,
+                "isHIFU": False,
+                "FocusPoint": None,
+            },
+        )
+
+    def test_convert_provider_data_keeps_non_numeric_values(self):
+        raw = {
+            "isLive": True,
+            "mode": 1,
+            "focus_depth": "",
+            "guankuan_a": "NaN",
+            "guankuan_b": "not-a-number",
+            "depth": None,
+            "focus_point": "PointF(434.85052, 272.8398)",
+        }
+
+        self.assertEqual(
+            api_server.convert_provider_data(raw),
+            {
+                "SkinDepth": "",
+                "A": "NaN",
+                "B": "not-a-number",
+                "Alpha": None,
+                "Depth": None,
+                "IsFreeze": False,
+                "isHIFU": False,
+                "FocusPoint": "PointF(434.85052, 272.8398)",
             },
         )
 
@@ -58,7 +108,7 @@ class ApiServerTests(unittest.TestCase):
         )
 
         payload = json.loads(response)
-        self.assertEqual(payload["Depth"], "40")
+        self.assertEqual(payload["Depth"], 40)
         self.assertTrue(payload["IsFreeze"])
         self.assertFalse(payload["isHIFU"])
 
@@ -351,7 +401,7 @@ class ApiServerTests(unittest.TestCase):
             trace_id="unit-trace",
         )
 
-        self.assertEqual(json.loads(response)["SkinDepth"], "6.5")
+        self.assertEqual(json.loads(response)["SkinDepth"], 6.5)
         log_text = stream.getvalue()
         self.assertIn("ONLINE timepoint trace_id=unit-trace | step=handle_request_entered | wall_time=", log_text)
         self.assertIn("step=provider_fetch_start", log_text)

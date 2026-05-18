@@ -12,6 +12,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
@@ -709,6 +710,32 @@ def parse_request(text: str) -> ParsedRequest:
     return ParsedRequest(req_type=req_type, param=param, arg=arg)
 
 
+def normalize_online_value(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float, Decimal)):
+        decimal_value = Decimal(str(value))
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "":
+            return value
+        try:
+            decimal_value = Decimal(stripped)
+        except InvalidOperation:
+            return value
+    else:
+        return value
+
+    if not decimal_value.is_finite():
+        return value
+    rounded = decimal_value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if rounded == rounded.to_integral_value():
+        return int(rounded)
+    return float(rounded)
+
+
 def convert_provider_data(raw_data: dict) -> dict:
     if raw_data is None:
         raise ValueError("GetContentProvider returned None")
@@ -720,14 +747,14 @@ def convert_provider_data(raw_data: dict) -> dict:
     is_hifu = raw_data.get("mode") == 2
 
     return {
-        "SkinDepth": raw_data.get("focus_depth"),
-        "A": raw_data.get("guankuan_a"),
-        "B": raw_data.get("guankuan_b"),
-        "Alpha": None,
-        "Depth": raw_data.get("depth"),
-        "IsFreeze": is_freeze,
+        "SkinDepth": normalize_online_value(raw_data.get("focus_depth")),
+        "A": normalize_online_value(raw_data.get("guankuan_a")),
+        "B": normalize_online_value(raw_data.get("guankuan_b")),
+        "Alpha": normalize_online_value(None),
+        "Depth": normalize_online_value(raw_data.get("depth")),
+        "IsFreeze": normalize_online_value(is_freeze),
         "isHIFU": is_hifu,
-        "FocusPoint": raw_data.get("focus_point"),
+        "FocusPoint": normalize_online_value(raw_data.get("focus_point")),
     }
 
 
