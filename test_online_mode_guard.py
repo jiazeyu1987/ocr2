@@ -146,8 +146,38 @@ class OnlineModeGuardTestCase(unittest.TestCase):
                 temp_root / "TreatTools" / "ProgressButton.py",
             )
             self.assertEqual(module.B_MODE_BLOCK_MESSAGE, "B模式下不能运行")
+            self.assertEqual(module.FREEZE_BLOCK_MESSAGE, "超声设备冻结中，请激活设备。")
             self.assertTrue(module.should_block_on_non_hifu_mode({"isHIFU": False}))
             self.assertFalse(module.should_block_on_non_hifu_mode({"isHIFU": True}))
+            self.assertTrue(module.should_request_online_before_treat(0))
+            self.assertTrue(module.should_request_online_before_treat(1))
+            self.assertFalse(module.should_request_online_before_treat(2))
+            self.assertTrue(module.should_check_freeze_in_online_response(0))
+            self.assertTrue(module.should_check_freeze_in_online_response(1))
+            self.assertFalse(module.should_check_freeze_in_online_response(2))
+            self.assertEqual(
+                module.get_treatment_online_block_message(
+                    {"isHIFU": False, "IsFreeze": True},
+                    freeze_check_enabled=True,
+                ),
+                "B模式下不能运行",
+            )
+            self.assertEqual(
+                module.get_treatment_online_block_message(
+                    {"isHIFU": True, "IsFreeze": True},
+                    freeze_check_enabled=True,
+                ),
+                "超声设备冻结中，请激活设备。",
+            )
+            self.assertIsNone(
+                module.get_treatment_online_block_message(
+                    {"isHIFU": True, "IsFreeze": True},
+                    freeze_check_enabled=False,
+                )
+            )
+            progress_button_source = SOURCE_PROGRESS_BUTTON.read_text(encoding="utf-8", errors="ignore")
+            self.assertNotIn("super().mousePressEvent(event)", progress_button_source)
+            self.assertNotIn("super().mouseReleaseEvent(event)", progress_button_source)
         finally:
             _restore_stub_modules(inserted)
             temp_dir.cleanup()
@@ -162,8 +192,56 @@ class OnlineModeGuardTestCase(unittest.TestCase):
             )
             module = _load_module("VeinTreatUnderTest", temp_root / "VeinTreat.py")
             self.assertEqual(module.B_MODE_BLOCK_MESSAGE, "B模式下不能运行")
-            self.assertTrue(module.should_block_on_non_hifu_mode({"isHIFU": False}))
-            self.assertFalse(module.should_block_on_non_hifu_mode({"isHIFU": True}))
+            self.assertEqual(
+                module.get_treatment_online_block_message(
+                    {"isHIFU": False, "IsFreeze": True},
+                    freeze_check_enabled=True,
+                ),
+                "B模式下不能运行",
+            )
+            self.assertEqual(
+                module.get_continue_treat_planning_error(
+                    {"A": 1.5, "B": 1.5, "Alpha": None}
+                ),
+                "ONLINE返回缺少Alpha，无法规划连续治疗路径",
+            )
+            self.assertIsNone(
+                module.get_continue_treat_planning_error(
+                    {"A": 1.5, "B": 1.5, "Alpha": 12.0}
+                )
+            )
+            self.assertEqual(
+                module.build_continue_treat_debug_snapshot(
+                    btn_more_enabled=True,
+                    btn_more_visible=False,
+                    btn_more_down=False,
+                    widget_more_visible=True,
+                    overlay_visible=True,
+                    overlay_enabled=True,
+                    continue_enabled=False,
+                    continue_visible=False,
+                    queue_pointer=3,
+                    queue_length=9,
+                    timer_active=True,
+                    util_more_treat=True,
+                    planned_pose_count=6,
+                ),
+                {
+                    "btn_more_enabled": True,
+                    "btn_more_visible": False,
+                    "btn_more_down": False,
+                    "widget_more_visible": True,
+                    "overlay_visible": True,
+                    "overlay_enabled": True,
+                    "continue_enabled": False,
+                    "continue_visible": False,
+                    "queue_pointer": 3,
+                    "queue_length": 9,
+                    "timer_active": True,
+                    "util_more_treat": True,
+                    "planned_pose_count": 6,
+                },
+            )
         finally:
             _restore_stub_modules(inserted)
             temp_dir.cleanup()

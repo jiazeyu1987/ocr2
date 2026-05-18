@@ -12,13 +12,19 @@
 - The first fix introduced a new production dependency file, `online_mode_guard.py`.
 - The deployed Slicer module tree did not include that file, so Python failed during module import and `VeinTreat` never instantiated.
 - Because `VeinTreat` failed to instantiate, downstream code kept reporting that the module was registered but not instantiated.
+- After that import issue was removed, the treatment button still had a separate logic bug: it used `check_is_freeze_before_treat` to decide whether to send `ONLINE` at all. When that config was `False`, the button skipped `ONLINE`, so neither the non-HiFu warning nor the freeze warning could ever be shown from that path.
+- A second behavior issue remained for freeze handling: the deployed config file currently sets `check_is_freeze_before_treat: false`, so the old treatment-start and continue-treatment paths also suppressed the freeze warning even after `ONLINE` was requested successfully.
 
 ## Regression Test Added Or Updated
 - Updated [test_online_mode_guard.py](/D:/ocr2/test_online_mode_guard.py:1) to simulate a deployed module tree that includes only `VeinTreat.py` and `TreatTools/ProgressButton.py`, deliberately omitting any extra helper file.
 - The test imports both modules under stubbed Qt/Slicer dependencies and asserts:
 - `B_MODE_BLOCK_MESSAGE == "B模式下不能运行"`.
+- `FREEZE_BLOCK_MESSAGE == "超声设备冻结中，请激活设备。"`.
 - `should_block_on_non_hifu_mode({"isHIFU": False})` is `True`.
 - `should_block_on_non_hifu_mode({"isHIFU": True})` is `False`.
+- `should_request_online_before_treat(0)` and `should_request_online_before_treat(1)` are `True`, while mode `2` is `False`.
+- `should_check_freeze_in_online_response(0)` and `should_check_freeze_in_online_response(1)` are `True`, while mode `2` is `False`.
+- `get_treatment_online_block_message({"isHIFU": False, "IsFreeze": True}, freeze_check_enabled=True)` returns `B模式下不能运行`.
 
 ## RED Command And Expected Failure
 RED:
@@ -38,6 +44,8 @@ GREEN:
 ## Verification
 - Both guards now keep their logic inside existing deployed files instead of relying on an extra helper module file.
 - The warning text is `B模式下不能运行`.
+- The treatment-button path no longer skips `ONLINE` just because freeze checking is disabled.
+- The freeze popup path no longer depends on the current `check_is_freeze_before_treat: false` deployment config.
 - Deployment-style import simulation and syntax checks passed.
 
 ## Blockers And Follow-Up Actions
